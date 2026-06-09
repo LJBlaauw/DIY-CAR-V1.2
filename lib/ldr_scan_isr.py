@@ -1,11 +1,13 @@
 # ldr_scan_isr.py
 # LDR-scan met PIO-IRQ
-# - aanroepen met graden (scan('l', 5.0, 100.0, start_graden=10.0, ...))
-# - rekent zelf graden -> cm gebaseerd op WHEEL_BASE_CM
-# - gebruikt ALTIJD PIO state machine 5 (stepper gebruikt SM0..SM4)
+# - RP2350 heeft 3 PIO-blokken (SM 0-11):
+#     SM0-SM3 : stepper (PIO0)
+#     SM4     : ultrasoon (PIO1)
+#     SM8     : LDR-scan klok (PIO2) — apart blok, geen IRQ-conflict met SM4
+# - aanroepen: scan('l', 5.0, 100.0, start_graden=10.0, ...)
+# - rekent graden -> cm via WHEEL_BASE_CM
+# - CSV gebruikt ; als scheidingsteken (Nederlands Excel-formaat)
 # - procedureel, geen klasse
-# - wacht blokkerend op pre-roll
-# - ISR heeft guard tegen array index out of range
 
 from machine import Pin, ADC
 from rp2 import PIO, StateMachine, asm_pio
@@ -16,16 +18,16 @@ import math
 #  CONFIG / CONSTANTEN
 # =========================
 
-LDR_SM_ID            = 5              # LDR gebruikt SM5
+LDR_SM_ID            = 8              # PIO2 SM0 — los van stepper (PIO0) en ultrasoon (PIO1)
 LDR_PIO_FREQ_HZ      = 100_000
 
 LDR_PIN_A            = 26
 LDR_PIN_B            = 27
-LDR_TIMER_PIN        = 9
+LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB, intern gebruik)
 
 # geometrie
-WHEEL_BASE_CM        = 18.5           # afstand tussen de wielen
-ROT_SCALE            = 1.0            # tuning-factor indien praktijk ≠ theorie
+WHEEL_BASE_CM        = 18.5
+ROT_SCALE            = 1.0
 
 # LDR instellingen
 LDR_R_FIXED_OHM      = 10_000
@@ -35,15 +37,14 @@ LDR_GAIN_A           = 1.0
 LDR_GAIN_B           = 1.136
 
 LDR_SAMPLES_PER_TICK = 8
-TARGET_SAMPLES_PER_DEG = 3            # richtwaarde ~3 samples per graad
+TARGET_SAMPLES_PER_DEG = 3
 
 ACCEL_MM_S2          = 500.0
-
 BACKTRACK_SPEED_CM_S = 3.0
 CSV_DEFAULT          = "/scan.csv"
 
 # =========================
-#  PIO TIMER
+#  PIO TIMER (op PIO2)
 # =========================
 
 @asm_pio(sideset_init=PIO.OUT_LOW)
@@ -105,7 +106,7 @@ def _start_pio(tick_ms):
         try:
             _sm.irq(None)
             _sm.active(0)
-        except:
+        except Exception:
             pass
     _sm = StateMachine(LDR_SM_ID, clk_var,
                        freq=LDR_PIO_FREQ_HZ,
@@ -120,7 +121,7 @@ def _stop_pio():
         try:
             _sm.irq(None)
             _sm.active(0)
-        except:
+        except Exception:
             pass
 
 # =========================
@@ -128,8 +129,7 @@ def _stop_pio():
 # =========================
 
 def _deg_to_distance_cm(deg):
-    dist = math.pi * WHEEL_BASE_CM * (deg / 360.0)
-    return dist * ROT_SCALE
+    return math.pi * WHEEL_BASE_CM * (deg / 360.0) * ROT_SCALE
 
 def _opposite_dir(d):
     return 'l' if d == 'r' else 'r'
@@ -150,10 +150,16 @@ def _estimate_time_from_degrees(total_deg, speed_cm_s):
         T = 2.0 * math.sqrt(s_mm / a)
     return T, dist_cm
 
+_STEPPER_DONE_TIMEOUT_MS = 30_000
+
 def _wait_stepper_done(stepper_mod):
-    """Blokkeer tot beide motor state machines klaar zijn."""
+    """Blokkeer tot beide motor state machines klaar zijn, max 30 s."""
+    import time
+    t0 = time.ticks_ms()
     while stepper_mod.sm0.active() or stepper_mod.sm1.active():
-        pass
+        if time.ticks_diff(time.ticks_ms(), t0) > _STEPPER_DONE_TIMEOUT_MS:
+            stepper_mod.stop()
+            raise RuntimeError("stepper timeout in _wait_stepper_done")
 
 # =========================
 #  ISR (met guard)
@@ -162,7 +168,6 @@ def _wait_stepper_done(stepper_mod):
 def _on_pio_irq(sm):
     global _idx, _tick_counter, _segment_done
 
-    # guard tegen extra IRQ's na einde buffer
     if _tick_counter <= 0:
         return
 
@@ -198,6 +203,7 @@ def attach_stepper_reader(fn):
         _stepper_pos = fn
 
 def measure_now(n=8):
+    """Direct beide LDR-waarden lezen (%, tuple A/B)."""
     _init_hw()
     acc_a = 0
     acc_b = 0
@@ -232,13 +238,15 @@ def _res_to_percent_log(r_ohm, gain=1.0):
     ln_min = math.log(LDR_R_MIN_OHM)
     ln_max = math.log(LDR_R_MAX_OHM)
     p = 100.0 * (ln_max - math.log(r)) / (ln_max - ln_min)
-    if p < 0.0: p = 0.0
+    if p < 0.0:   p = 0.0
     if p > 100.0: p = 100.0
     return p
 
 def _postprocess_to_percent():
     N = len(_raw_sum_a)
-    AVG = [0.0] * N
+    pct_a = [0.0] * N
+    pct_b = [0.0] * N
+    avg   = [0.0] * N
     for i in range(N):
         adc_a = _raw_sum_a[i] // LDR_SAMPLES_PER_TICK
         adc_b = _raw_sum_b[i] // LDR_SAMPLES_PER_TICK
@@ -246,26 +254,30 @@ def _postprocess_to_percent():
         rb = _adc_to_res_ohm(adc_b)
         pa = _res_to_percent_log(ra, LDR_GAIN_A)
         pb = _res_to_percent_log(rb, LDR_GAIN_B)
-        AVG[i] = round((pa + pb) * 0.5, 1)
-    return AVG, _step_s1
+        pct_a[i] = round(pa, 1)
+        pct_b[i] = round(pb, 1)
+        avg[i]   = round((pa + pb) * 0.5, 1)
+    return pct_a, pct_b, avg, _step_s1
 
-def _find_peak(AVG):
-    if not AVG:
+def _find_peak(avg):
+    if not avg:
         return -1, None
     i_max = 0
-    v_max = AVG[0]
-    for i in range(1, len(AVG)):
-        if AVG[i] > v_max:
-            v_max = AVG[i]
+    v_max = avg[0]
+    for i in range(1, len(avg)):
+        if avg[i] > v_max:
+            v_max = avg[i]
             i_max = i
     return i_max, v_max
 
-def _write_csv_small(path, AVG, STEP):
+def _write_csv(path, PCT_A, PCT_B, AVG, STEP):
+    """Schrijf CSV met ; als scheidingsteken (Nederlands Excel-formaat)."""
     try:
         with open(path, "w") as f:
-            f.write("index,avg_percent,stepper_s1\n")
+            f.write("index;ldr_a_pct;ldr_b_pct;avg_pct;stepper_stappen\n")
             for i in range(len(AVG)):
-                f.write("{},{:.1f},{}\n".format(i+1, AVG[i], STEP[i]))
+                f.write("{};{:.1f};{:.1f};{:.1f};{}\n".format(
+                    i + 1, PCT_A[i], PCT_B[i], AVG[i], STEP[i]))
         return True, None
     except Exception as e:
         return False, e
@@ -279,12 +291,13 @@ def scan(dir_char,
          graden,
          start_graden=0.0,
          go_max=True,
-         exell=True,
+         excel=True,
          out_csv=CSV_DEFAULT):
     """
     Voorbeeld:
-      res = scan('l', 5.0, 100.0, start_graden=10.0, go_max=True, exell=True)
+      res = scan('l', 5.0, 100.0, start_graden=10.0, go_max=True, excel=True)
     """
+    import time
     global _raw_sum_a, _raw_sum_b, _step_s1
     global _idx, _tick_counter, _segment_done, _mode
 
@@ -293,7 +306,6 @@ def scan(dir_char,
 
     import stepper
 
-    # automatisch teller koppelen
     if hasattr(stepper, "pio_pos1"):
         attach_stepper_reader(stepper.pio_pos1)
 
@@ -302,27 +314,23 @@ def scan(dir_char,
         pre_dist_cm = _deg_to_distance_cm(start_graden)
         stepper.rotate(_opposite_dir(dir_char), speed_cm_s, pre_dist_cm)
         _wait_stepper_done(stepper)
-    else:
-        pre_dist_cm = 0.0  # wordt verder niet gebruikt; alleen voor volledigheid
 
-    # 2) totale graden (voor sampleplanning)
+    # 2) scan planning (pre-roll + scan samen voor tijdschatting)
     total_deg = graden + max(0.0, start_graden)
-
-    # 3) tijd + afstand schatten
     T_s, dist_cm = _estimate_time_from_degrees(total_deg, speed_cm_s)
-    T_s *= 1.05   # kleine marge
+    T_s *= 1.05
 
-    # 4) aantal samples + tick_ms
+    # 3) aantal samples + tick_ms
     target_samples = int(round(TARGET_SAMPLES_PER_DEG * total_deg))
     if target_samples < 1:
         target_samples = 1
     tick_ms = int(round((T_s * 1000.0) / target_samples))
-    if tick_ms < 1: tick_ms = 1
+    if tick_ms < 1:   tick_ms = 1
     if tick_ms > 100: tick_ms = 100
 
     N = target_samples
 
-    # 5) buffers
+    # 4) buffers
     _raw_sum_a = array('I', [0] * N)
     _raw_sum_b = array('I', [0] * N)
     _step_s1   = array('i', [0] * N)
@@ -330,26 +338,31 @@ def scan(dir_char,
     _tick_counter = N
     _segment_done = False
 
-    # 6) PIO starten
+    # 5) PIO starten, dan scan-rotatie
     _start_pio(tick_ms)
     _mode = "scan"
-
-    # 7) ECHTE scan-rotatie
     stepper.rotate(dir_char, speed_cm_s, dist_cm)
 
-    # 8) wachten tot alle samples binnen zijn
-    while not _segment_done:
-        pass
+    # 6) wachten tot alle samples binnen zijn (max T_s * 2 + 5 s veiligheidsmarge)
+    scan_timeout_ms = int((T_s * 2.0 + 5.0) * 1000)
+    t0 = time.ticks_ms()
+    try:
+        while not _segment_done:
+            if time.ticks_diff(time.ticks_ms(), t0) > scan_timeout_ms:
+                raise RuntimeError("LDR scan timeout: samples niet compleet")
+    finally:
+        # 7) PIO altijd stoppen (ook bij fout of Ctrl+C)
+        _stop_pio()
+        _mode = "idle"
 
-    # 9) PIO stoppen
-    _stop_pio()
-    _mode = "idle"
+    # 7b) motor afwachten zodat backtrack niet conflicteert
+    _wait_stepper_done(stepper)
 
-    # 10) naverwerken
-    AVG, STEP = _postprocess_to_percent()
+    # 8) naverwerken
+    PCT_A, PCT_B, AVG, STEP = _postprocess_to_percent()
     i_max, v_max = _find_peak(AVG)
 
-    # 11) terug naar max (altijd tegenrichting van scan)
+    # 9) terug naar piekpositie
     back_info = None
     if go_max and i_max >= 0:
         s1_start = STEP[0]
@@ -358,7 +371,7 @@ def scan(dir_char,
         delta_steps = s1_peak - s1_end
 
         if s1_end != s1_start:
-            frac   = delta_steps / (s1_end - s1_start)
+            frac    = delta_steps / (s1_end - s1_start)
             back_cm = abs(dist_cm * frac)
         else:
             back_cm = 0.0
@@ -371,26 +384,24 @@ def scan(dir_char,
                          back_cm=back_cm,
                          delta_steps=delta_steps)
 
-    # 12) CSV
+    # 10) CSV schrijven
     csv_path = None
-    csv_err = None
-    if exell:
-        ok, err = _write_csv_small(out_csv, AVG, STEP)
-        if ok:
-            csv_path = out_csv
-        else:
-            csv_err = str(err)
+    csv_err  = None
+    if excel:
+        ok, err = _write_csv(out_csv, PCT_A, PCT_B, AVG, STEP)
+        csv_path = out_csv if ok else None
+        csv_err  = str(err) if not ok else None
 
     return dict(
-        samples=len(AVG),
-        tick_ms=tick_ms,
-        est_time_s=T_s,
-        total_deg=total_deg,
-        dist_cm=dist_cm,
-        peak_index=i_max,
-        peak_percent=v_max,
-        s1_at_peak=STEP[i_max] if i_max >= 0 else None,
-        backtrack=back_info,
-        csv_path=csv_path,
-        csv_error=csv_err,
+        samples      = len(AVG),
+        tick_ms      = tick_ms,
+        est_time_s   = T_s,
+        total_deg    = total_deg,
+        dist_cm      = dist_cm,
+        peak_index   = i_max,
+        peak_percent = v_max,
+        s1_at_peak   = STEP[i_max] if i_max >= 0 else None,
+        backtrack    = back_info,
+        csv_path     = csv_path,
+        csv_error    = csv_err,
     )

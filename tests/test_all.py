@@ -44,16 +44,12 @@ ldr.attach_stepper_reader(stepper.pio_pos1)
 print(ldr.measure_now())
 print('start scan')
 
-ultrasoon.sm.active(0)
-
 res = ldr.scan('l', 5.0, 100.0, start_graden=10.0,
                go_max=True,
-               exell=True,
+               excel=True,
                out_csv="/scan.csv")
 print(res)
 sc.servo_rest()
-
-ultrasoon.sm.active(1)
 
 #ultrasoon.reset_ultrasoon()
 

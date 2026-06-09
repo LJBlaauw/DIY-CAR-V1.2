@@ -1,8 +1,8 @@
 # servo_ctrl.py
-# RP2040 MicroPython
-# - Servos: 1 (GPIO2), 2 (GPIO3), 4 (GPIO5)
-# - Laser-PWM op GPIO4 (de voormalige "servo3" pin), deelt PWM-slice => zelfde 50 Hz
-# - PWM-tick via GPIO7 (INPUT, FALLING), fysiek verbinden met PWM van servo1 (GPIO2)
+# RP2350 MicroPython
+# - Servos: 1 (GPIO2), 2 (GPIO3), 3 (GPIO4), 4 (GPIO22)
+# - Laser-PWM op GPIO15 via BS170 MOSFET
+# - PWM-tick via GPIO5 (INPUT, FALLING), fysiek verbinden met PWM van servo1 (GPIO2)
 # - Mapping servo: 0° -> 2.5% duty, 180° -> 12.5% duty
 # - Per-servo rustposities in duty-% (servo1: 4.1%, servo2: 3.6%, servo4: 2.0%)
 # - Bij __init__ direct alle servo's naar hun rustpositie
@@ -11,8 +11,8 @@
 # - servo_rest() zonder argument: geordend 4 -> 1 -> 2 -> 3, allemaal @ 20 °/s
 #
 # Let op:
-#   * Verbind GPIO2 (servo1 PWM) met GPIO7 (INPUT met PULL_DOWN) voor de 50 Hz "tick".
-#   * Laser via low-side MOSFET (GPIO4 -> gate, 100R in serie, 100k naar GND). Laser en Pico GND gemeenschappelijk.
+#   * Verbind GPIO2 (servo1 PWM) met GPIO5 (INPUT met PULL_DOWN) voor de 50 Hz "tick".
+#   * Laser via low-side MOSFET (GPIO15 -> gate, 100R in serie). Laser en Pico GND gemeenschappelijk.
 #   * Laser-PWM deelt slice met servo's: frequentie altijd 50 Hz (set_laser_freq() is no-op).
 #
 from machine import Pin, PWM, ADC

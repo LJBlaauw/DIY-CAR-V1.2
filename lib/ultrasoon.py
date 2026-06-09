@@ -34,8 +34,8 @@ def usonic_pio():
     jmp(pin, "GOT_RISE")        # spring als hoog
     jmp(x_dec, "WAIT_RISE")     # anders aftellen
 
-    # Timeout pad → push 0 en exit
-    set(isr, 0)
+    # Timeout pad → push osr (= timeout_cycles) als sentinel zodat read_us() measured=0 ziet
+    mov(isr, osr)
     jmp("PUSH_EXIT")
 
     # Echo hoog → aftellen
@@ -59,9 +59,12 @@ def usonic_pio():
 
 
 # ====== Config ======
-PIO_FREQ_HZ   = 2_000_000
-INTERVAL_MS   = 50
-TIMEOUT_US    = 30_000
+PIO_FREQ_HZ     = 2_000_000
+INTERVAL_MS     = 50
+TIMEOUT_US      = 30_000
+
+_PIO_SCALE      = PIO_FREQ_HZ // 1_000_000   # cycles per µs (= 2)
+_TIMEOUT_CYCLES = TIMEOUT_US * _PIO_SCALE     # wat de PIO als countdown krijgt (= 60_000)
 
 # Ping-pong buffer
 _buf = [0, 0]
@@ -79,7 +82,7 @@ def _irq_handler(sm):
     _buf[_widx] = remainder
     _sid = (_sid + 1) & 0x7fffffff
 
-# ====== Init state machine 6 ======
+# ====== Init state machine 4 (PIO1 SM0) ======
 sm = rp2.StateMachine(
     4, usonic_pio, freq=PIO_FREQ_HZ,
     set_base=Pin(20, Pin.OUT),
@@ -87,7 +90,7 @@ sm = rp2.StateMachine(
     jmp_pin=Pin(19, Pin.IN),
 )
 sm.put(int(PIO_FREQ_HZ * (INTERVAL_MS/1000)))
-sm.put(TIMEOUT_US)
+sm.put(_TIMEOUT_CYCLES)   # PIO telt in cycles; _TIMEOUT_CYCLES = TIMEOUT_US * _PIO_SCALE
 sm.irq(_irq_handler)
 sm.active(1)
 
@@ -98,13 +101,13 @@ def stop():
 def read_us():
     """Geef (us, kind) terug: kind ∈ {'ok','timeout','overflow'}"""
     remainder = _buf[_widx]
-    measured = TIMEOUT_US - remainder
-    if measured <= 0:
+    measured_cycles = _TIMEOUT_CYCLES - remainder   # 0 bij timeout (sentinel = osr)
+    if measured_cycles <= 0:
         return None, 'timeout'
-    elif measured >= TIMEOUT_US:
+    measured_us = measured_cycles // _PIO_SCALE
+    if measured_us >= TIMEOUT_US:
         return TIMEOUT_US, 'overflow'
-    else:
-        return measured, 'ok'
+    return measured_us, 'ok'
 
 def read_cm():
     """Geef (cm, kind) terug, cm afgerond op 0,1 cm"""

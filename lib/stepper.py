@@ -30,7 +30,7 @@ def stepper_counter():
     label("dec_x")          # type: ignore
     jmp(x_dec, "loop")      # type: ignore  X--, zolang X != 0 blijf in loop
     irq(rel(0))                  # type: ignore  Target bereikt → één IRQ naar Python
-    jump("loop")            # type: ignore  Wacht tot de motor weer gaat lopen.
+    jmp("loop")             # type: ignore  Wacht tot de motor weer gaat lopen.
 
 
 # -----------------------------------------

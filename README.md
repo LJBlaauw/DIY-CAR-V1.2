@@ -46,7 +46,7 @@ Zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md) voor de volledige GPIO-ta
 | SM2 | stepper.py | Stapenteller (doel-detectie) motor A |
 | SM3 | stepper.py | Stapenteller (doel-detectie) motor B |
 | SM4 | ultrasoon.py | Ultrasoonsensor trigger + echometing |
-| SM5 | ldr_scan_isr.py | Variabele klok voor LDR-sampletiming |
+| SM8 | ldr_scan_isr.py | Variabele klok voor LDR-sampletiming (PIO2 SM0) |
 
 ---
 
@@ -144,7 +144,7 @@ Ultrasoonsensor RCWL-1601 via PIO (SM4). Meet asynchroon in de achtergrond met p
 
 ### `lib/ldr_scan_isr.py`
 
-LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B synchroon met een PIO-klok (SM5) via ISR.
+LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B synchroon met een PIO-klok (SM8 / PIO2 SM0) via ISR.
 
 **Status: bevat nog bekende fouten — in ontwikkeling.**
 
