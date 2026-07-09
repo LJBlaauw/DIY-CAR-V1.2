@@ -23,6 +23,7 @@ Een autonoom rijdend robotkarretje dat een lichtbron opzoekt, er naartoe rijdt e
 | Stappenmotor | 2 | — | Driver: TMC2209 |
 | Servomotor (arm) | 2 | MG996R | GPIO2, GPIO3 |
 | Servomotor (grijper) | 1 | MG996R | GPIO22 — met stroomsensor |
+| Servomotor (optioneel/reserve) | 1 | MG996R | GPIO4 — bedraad op PCB, nog niet aangesloten/geïmplementeerd |
 | Ultrasoonsensor | 1 | RCWL-1601 | GPIO19 (Echo), GPIO20 (Trig) |
 | LDR | 2 | 10 kΩ spanningsdeler | GPIO26, GPIO27 |
 | Laser (kruishaar) | 1 | — | GPIO15 via MOSFET |
@@ -41,16 +42,16 @@ Zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md) voor de volledige GPIO-ta
 
 | SM | Module | Functie |
 |---|---|---|
-| SM0 | stepper.py | Stapgenerator motor A |
-| SM1 | stepper.py | Stapgenerator motor B |
-| SM2 | stepper.py | Stapenteller (doel-detectie) motor A |
-| SM3 | stepper.py | Stapenteller (doel-detectie) motor B |
-| SM4 | ultrasoon.py | Ultrasoonsensor trigger + echometing |
-| SM8 | ldr_scan_isr.py | Variabele klok voor LDR-sampletiming (PIO2 SM0) |
+| SM0 | stepper/stepper.py | Stapgenerator motor A |
+| SM1 | stepper/stepper.py | Stapgenerator motor B |
+| SM2 | stepper/stepper.py | Stapenteller (doel-detectie) motor A |
+| SM3 | stepper/stepper.py | Stapenteller (doel-detectie) motor B |
+| SM4 | ultrasoon/ultrasoon.py | Ultrasoonsensor trigger + echometing |
+| SM8 | LDR/ldr_scan_isr.py | Variabele klok voor LDR-sampletiming (PIO2 SM0) |
 
 ---
 
-### `lib/stepper.py`
+### `lib/stepper/stepper.py`
 
 Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk via eigen SM en teller-SM.
 
@@ -82,18 +83,23 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 
 ---
 
-### `lib/servo_crl.py`
+### `lib/servo/servo_crl.py`
 
 `ServoController` klasse voor 3× MG996R servo + kruishaarlaser.
 
 **Init:** `sc = ServoController()` — alle servo's gaan direct naar rustpositie.
 
 **Rustposities (duty %):**
-| Servo | GPIO | Rust (duty%) | Functie |
-|---|---|---|---|
-| 1 | GPIO2 | 4,1% | Onderste scharnier arm |
-| 2 | GPIO3 | 3,6% | Bovenste scharnier arm |
-| 4 | GPIO22 | 2,0% | Grijper |
+
+- De onderstaande rust waarden worden vervangen door de automatisch of handmatig bepaalde rust toestanden.
+
+#| Servo | GPIO | Rust (duty%) | Functie |
+#|---|---|---|---|
+#| 1 | GPIO2 | 4,1% | Onderste scharnier arm |
+#| 2 | GPIO3 | 3,6% | Bovenste scharnier arm |
+#| 4 | GPIO22 | 2,0% | Grijper |
+
+Deze waarden worden vervangen door de automatisch of handmatige instelling van de rust posities en op geslagen in een config.json
 
 **PWM-tick:** GPIO5 (INPUT) moet fysiek verbonden zijn met GPIO2 (servo1 PWM). De falling edge triggert de servo-update ISR @ 50 Hz.
 
@@ -121,7 +127,7 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 
 ---
 
-### `lib/ultrasoon.py`
+### `lib/ultrasoon/ultrasoon.py`
 
 Ultrasoonsensor RCWL-1601 via PIO (SM4). Meet asynchroon in de achtergrond met ping-pong buffer.
 
@@ -138,11 +144,11 @@ Ultrasoonsensor RCWL-1601 via PIO (SM4). Meet asynchroon in de achtergrond met p
 | `read_cm()` | `(cm, kind)` | Afstand in cm, afgerond op 0,1 cm |
 | `stop()` | — | Stop de SM |
 
-**Let op:** SM4 moet gestopt worden tijdens de LDR-scan (zie `test_all.py`).
+De ldr-scan routine gebruikt inmiddels een eigen PIO-blok (SM8, zie tabel hierboven) in plaats van hetzelfde blok als de ultrasoonsensor (SM4) — de RP2350 heeft 3 onafhankelijke PIO-blokken. Hiermee is het eerder gemelde PIO-conflict tussen ultrasoon en ldr-scan opgelost; SM4 hoeft niet meer gestopt te worden tijdens de LDR-scan.
 
 ---
 
-### `lib/ldr_scan_isr.py`
+### `lib/LDR/ldr_scan_isr.py`
 
 LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B synchroon met een PIO-klok (SM8 / PIO2 SM0) via ISR.
 
@@ -183,11 +189,11 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 ## Bekende issues / TODO
 
-- [ ] `ldr_scan_isr.py` — scan werkt niet correct; bugs aanwezig
-- [ ] Gyroscoop/kompas (GY9250) — nog niet geïmplementeerd
-- [ ] OLED (SSD1306) — nog niet geïmplementeerd
+- [ ] `lib/LDR/ldr_scan_isr.py` — scan werkt niet correct; controleren of het toepassen van het derde PIO blok dit probleem ondervangt
+- [ ] Gyroscoop/kompas (GY9250) — nog niet geïmplementeerd, Er is code toegevoegd voor de GY9250 (basic en fusion) moet getest worden
+- [ ] OLED (SSD1306) — nog niet geïmplementeerd (voorstel van implementatie in de te doen.md file)
 - [ ] GPIO-tabel controleren op nieuwe RP2350 print (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
-- [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module
+- [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module, de test all bewaren voor een snelle controlle test.
 
 ---
 

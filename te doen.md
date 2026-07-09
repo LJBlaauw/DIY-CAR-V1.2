@@ -1,0 +1,85 @@
+# Updaten van de code base
+**Alle stappen worden na elkaar geïmplementeerd en eerst gecontroleerd op correctheid, probleemanalyse en oplossingsvoorstellen**
+ 1. Behoud de PIO-asm code voor zover dit mogelijk is.
+ 2. Volgorde van implementatie (i.v.m. onderlinge afhankelijkheden): eerst GY9250-kompas, dan display (toont o.a. de kompasrichting), dan WS2812B-status, dan de laser-kruisbesturing, dan de ldr-scan fixes, dan servo-kalibratie, dan LDR-kalibratie, dan de stepper-ramp (voorstel). "Update globale_specificatie.md" gebeurt na elke stap, niet pas aan het eind.
+ 3. Kalibratiewaarden (GY9250, servo's, LDR's) niet in losse ad-hoc bestanden opslaan, maar in één centraal configuratiebestand op de RP2350 (bv. `config.json`) met een aparte sectie per module.
+
+# De micropython code voor de GY9250 is gedownload van de awesome-micropython website (auteur Tuupola).
+
+ 1. Deze micropython code voor de GY9250 gaat op core 1 van de RP2350 draaien, zodat de overige modules er geen last van hebben (rekenintensief).
+ 2. In het main programma kan gekozen worden of we `GY9250_basic.py` library functie importeren (alleen kompas functie) of de `GY9250_fusion.py` library functie (kompas plus accelerator correctie gaan gebruiken)
+ 3. Zorg voor veilige data-uitwisseling tussen core 0 en core 1 (bv. een lock of atomische lees/schrijf) voor de gedeelde kompaswaarde — dit is niet automatisch veilig met `_thread` op de RP2350.
+ 4. De code moet nog gereviewd en getest worden.
+ 5. De bedoeling van het kompas is om het karretje in de juiste richting te laten rijden. De ondergrond kan oneffen zijn en de wielomtrek kan een klein beetje afwijken. Het kompas kan dan gebruikt worden om de koers te corrigeren.
+ 6. `Calibrate_GY9250.py` wordt eenmalig gebruikt om de invloed van de stappenmotoren (hun magnetisch veld) op de kompasafwijking te bepalen, bijvoorbeeld door het karretje een aantal maal rond te laten draaien. De gevonden afwijking wordt weggeschreven naar een correctiebestand en tijdens normaal bedrijf door `GY9250_basic.py`/`GY9250_fusion.py` toegepast om de kompaswaarde te compenseren.
+ 7. De kalibratiewaarden (het correctiebestand uit punt 6) opslaan op de RP2350 (zie centrale configuratie, sectie hierboven).
+ 8. De kompasroutine wordt maar eens per 100/200 ms aangeroepen dit afhankelijk van de tijd nodig om de berekeningen af te ronden; zodra bekend is hoelang de berekening duurt leggen we vast wat de cyclustijd wordt. De resterende tijd binnen die cyclus op core 1 is beschikbaar voor de displayafhandeling (zie volgende sectie).
+
+# toevoegen display routine voor de 128x64 0,96 inch oled display met ssd1306 driver chip
+**Het display wordt gebruikt om realtime sensor- en bewegingsinformatie te tonen**
+ 1. Het display loopt net als de GY9250 op core 1. De routines voor de GY9250 en het display lopen steeds na elkaar, in het tempo van de GY9250-routine: de resterende tijd van elke kompascyclus (zie punt 8 hierboven) wordt gebruikt voor de displayafhandeling.
+ 2. Leg vast wat de minimaal acceptabele ververssnelheid is: als de GY9250-fusion traag is, kan "realtime" stepper-snelheid/afgelegde-weg-informatie merkbaar achterlopen.
+ 3. Voor zover mogelijk de informatie direct uit de PIO lezen.
+
+**te displayen informatie**
+ 1. lichtwaarden van beide LDR's in %
+ 2. afstandsmeting van de ultrasoonsensor in cm, of time-out
+ 3. kompasrichting in graden t.o.v. het noorden (max 180 kan + of min zijn t.o.v. het noorden)
+ 4. servoposities in % (rust = 0%, max = 100%)
+ 5. stepper motors snelheid, richting en afgelegde weg
+
+# toevoegen besturing WS2812B meerkleuren LED
+**de LED wordt gebruikt voor algemene status van het systeem**
+ 1. groen: alles ok (rust)
+ 2. rood (vast): catastrofale fout
+ 3. wit: karretje op weg naar target
+ 4. rood knipperend: niet-fatale waarschuwing (bv. servo-stroomlimiet bereikt) — apart van vast rood, dat gereserveerd blijft voor een echte stop
+ 5. blauw knipperend: LDR-scan bezig
+ 6. geel/oranje: karretje rijdt terug naar startpositie
+ 7. paars: kalibratiemodus (servo/LDR/kompas)
+ 8. uit: systeem uit / slaapstand
+ 9. maximale stroomverbruik meerkleuren led 25%
+
+# toevoegen besturing laser kruis
+ 1. Het laser kruis kan vanuit het hoofdprogramma aangestuurd worden met pwm regeling. pwm 0 is uit en pwm max is 100%
+
+# fouten in de ldr-scan routine oplossen
+ 1. Nu moet voordat de ldr_scan start de ultrasoonroutine gestopt worden. Dit vermoedelijk vanwege een PIO-conflict. Het verplaatsen van de ldr_scan en ultrasoonroutine naar verschillende PIO blokken moet dit probleem verhelpen.
+ 2. De ldr-scan moet tijdens de scan de twee LDR-waarden apart opnemen en daarna de richting van de lichtbron bepalen (nu wordt gepiekt op het gemiddelde van beide LDR's, dat is de bug). De LDR's zijn in het horizontale vlak uit elkaar geplaatst, er ontstaan tijdens het scannen dus twee maxima's. De gewenste richting ligt dus tussen de twee maxima's. Het kruispunt waar LDR A ≈ LDR B is het midden, dit na correctie van het gain-verschil tussen beide LDR's.
+ 3. De gemeten waarden in een csv-bestand opslaan op de RP2350.
+ 4. Na het terugdraaien van de kar naar de lichtbron controleren of dit overeenkomt met de berekende waarden.
+
+# routine voor de kalibratie servomotoren toevoegen
+**De servomotoren hebben nu vast ingestelde rustwaarden, dit moet via een kalibratieroutine**
+ 1. De kalibratie verloopt via de REPL.
+ 2. Automatisch: de kalibratie verloopt door de arm-servo's na elkaar op de grijper-servo-plug te plaatsen (dit is de enige connector met stroommeting). Door het meten van de stroom kan bepaald worden wanneer de servo in de uiterste stand komt (stroom overschrijdt de grenswaarde). Voer dan een kleine correctie door (pwm verminderen zodat er marge is) om te voorkomen dat de servo bij vastlopen veel stroom blijft verbruiken. Controleer daarna of de servo 180 graden gedraaid kan worden. Dit alles geldt alleen voor de arm-servo's.
+ 3. De grijper (servo 4, GPIO22) mag nooit meer dan 90 graden geopend worden (maximale stand) — leg vast hoe de grijper zelf zijn rust- en eindposities kalibreert, los van de 180°-testprocedure van de arm-servo's hierboven.
+ 4. Servo 3 (GPIO4, connector J3) is een optionele, reserve servo-aansluiting — géén onderdeel van de grijper. Deze is op de PCB bedraad (KiCad-netlist V1.2 bevestigt de aansluiting), maar wordt momenteel niet aangestuurd en is nog niet geïmplementeerd in `ServoController` (`lib/servo/servo_crl.py`). Verduidelijk of deze aansluiting alsnog meegenomen moet worden in de kalibratieroutine, of dat servo 1, 2 en 4 voorlopig volstaan.
+ 5. Handmatig: door het opgeven van pwm-waarden.
+ 6. Alle grenswaarden vastleggen in de centrale configuratie op de RP2350 (zie boven).
+ 7. Als de configuratie ontbreekt: rustpositie zetten op de huidige vaste standaardwaarden — het midden van de duty-range (50% van de 0–180° hoekrange) per servo (servo1 7,5%, servo2 7,5%, servo4 7,5% duty). Servo 3 (optioneel, nog niet geïmplementeerd) valt hier vooralsnog buiten.
+
+# routine voor de kalibratie van de LDR's toevoegen
+**de LDR-weerstanden hebben onderling behoorlijk grote afwijkingen en moeten dus gecompenseerd worden. Voorheen hebben we ze twee aan twee gepaard. Nu gaan we een semi-automatische route maken**
+ 1. De meetopdrachten worden via de REPL gegeven, beginnend op 5 meter afstand tussen kar en lichtbron (draai de kar zodat de laserpointer naar de lichtbron wijst). De kar wordt met de hand op de te meten afstanden gelegd en met de laser pointer uitgelijnd.
+ 2. Geef de volgende meetafstand op en meet beide LDR's.
+ 3. Herhaal dit tot een afstand van 5 cm. Meten bij afstanden 5m, 4m, 3m, 2m, 1m, 50cm, 15cm en 5cm.
+ 4. Bereken een correctie en sla die op op de RP2350 (zie centrale configuratie). Een correctietabel die de gevoeligheid tussen beide LDR's corrigeert.
+
+# voorstel maken voor het toevoegen van een ramp voor de stepper motors
+**Nu wordt direct een snelheid opgegeven voor de stappenmotor; als de massatraagheid te groot is zal de kar niet in beweging komen. Nu loopt het aansturen en meten van de afgelegde weg 100% in de PIO zonder CPU-overhead (behalve een eenmalige interrupt als de targetpositie gehaald is)**
+ 1. Is er een lineaire versnellingsregeling mogelijk die geen of minimale CPU-overhead nodig heeft? Om dit goed te doen zal de steppuls-timing tussentijds steeds veranderd moeten worden. Voorgaande pogingen waren niet succesvol. Dus alleen een werkingsprincipe voorstellen, nog niet implementeren.
+
+# calibraties
+**Alle calibraties worden in een aparte code sectie uitgevoerd, los van het besturingsprogramma. Bedoeling is dat alle losse kalibraties (GY9250-stappenmotorcompensatie, servo's, LDR's) na elkaar in één sessie doorlopen kunnen worden; kalibraties die niet nodig zijn worden overgeslagen.**
+ 1. Na opstart wordt via de REPL gevraagd of er gekalibreerd moet worden. Als binnen 2 seconden geen bevestiging via het keyboard gegeven wordt, start het besturingsprogramma op.
+ 2. Bij bevestiging worden de kalibraties stap voor stap (na elkaar) aangeboden, elk met de vraag of deze stap uitgevoerd moet worden:
+    - **n**: deze stap wordt overgeslagen, door naar de volgende kalibratie.
+    - **y**: de kalibratie wordt uitgevoerd; het resultaat wordt getoond met de vraag of dit opgeslagen moet worden (y/n).
+    - **x**: de gehele kalibratiesessie wordt direct beëindigd, met de vraag of de tot dan toe uitgevoerde kalibraties opgeslagen moeten worden.
+ 3. De configuratie wordt bij start van de sessie ingelezen. Zodra tijdens een kalibratiestap daadwerkelijk een wijziging optreedt, wordt eerst de nog ongewijzigde (sessie-start-)configuratie weggeschreven naar `configuratie_oud` (eenmalige backup per sessie), en pas daarna de nieuwe waarde in het configuratiebestand opgeslagen.
+ 4. Tijdens de kalibratiesessie toont de WS2812B-LED paars (zie WS2812B-sectie hieronder) en toont het display een tekst die aangeeft dat het systeem in kalibratiemodus staat.
+ 5. Deze sectie is de overkoepelende opstartflow die de GY9250-stappenmotorkalibratie (punt 6 hierboven), de servo-kalibratieroutine en de LDR-kalibratieroutine na elkaar aanroept.
+
+# updaten globale_specificatie.md
+**Deze te-doen-lijst betekent dat de globale_specificatie.md na elke succesvol afgeronde stap in deze lijst aangepast moet worden.**
