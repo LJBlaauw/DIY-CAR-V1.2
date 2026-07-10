@@ -1,21 +1,22 @@
-import machine
 import time
-from machine import ADC, Pin
+from machine import ADC, Pin, I2C
 from ssd1306 import SSD1306_I2C
-import ldr_scan_isr as ldr
 
 # --- Testscript: LDR (gemeten spanningen) ---
-# LDR A / LDR B: zie ldr_scan_isr.LDR_PIN_A / LDR_PIN_B (GPIO26 / GPIO27)
+# LDR A / LDR B: GPIO26 / GPIO27 (moet overeenkomen met ldr_scan_isr)
 # OLED (SSD1306): GPIO0 (SDA0) / GPIO1 (SCL0) -> I2C-bus 0
+
+LDR_PIN_A = 26
+LDR_PIN_B = 27
 
 ADC_VREF = 3.3
 ADC_MAX = 65535.0
 
-i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0), freq=400000)
+i2c_oled = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
 oled = SSD1306_I2C(128, 64, i2c_oled)
 
-adc_a = ADC(Pin(ldr.LDR_PIN_A, Pin.IN))
-adc_b = ADC(Pin(ldr.LDR_PIN_B, Pin.IN))
+adc_a = ADC(LDR_PIN_A)
+adc_b = ADC(LDR_PIN_B)
 
 
 def toon(regels):
@@ -29,8 +30,8 @@ def naar_volt(raw_u16):
     return (raw_u16 / ADC_MAX) * ADC_VREF
 
 
-toon(["LDR test", f"pin A={ldr.LDR_PIN_A} B={ldr.LDR_PIN_B}", "start over 2s..."])
-print(f"LDR test: gemeten spanningen op GPIO{ldr.LDR_PIN_A} / GPIO{ldr.LDR_PIN_B}")
+toon(["LDR test", f"pin A={LDR_PIN_A} B={LDR_PIN_B}", "start over 2s..."])
+print(f"LDR test: gemeten spanningen op GPIO{LDR_PIN_A} / GPIO{LDR_PIN_B}")
 time.sleep(2)
 
 print("Test gestart. Ctrl-C om te stoppen.")

@@ -13,8 +13,9 @@ from ssd1306 import SSD1306_I2C
 # de robot op zijn as te laten draaien tijdens het kalibreren.
 
 DRAAI_SNELHEID_CM_S = 8       # rotatiesnelheid van elk wiel
-DRAAI_AFSTAND_CM = 500        # ruim voldoende voor meerdere volle rondjes
-AANTAL = 1000                 # ca. 15-20 seconden metingen
+DRAAI_AFSTAND_CM = 800        # ruim voldoende voor meerdere volle rondjes
+AANTAL = 1000                 # aantal magnetometer-metingen
+OLED_INTERVAL = 10            # update OLED elke N metingen (snellere sampling)
 
 i2c_sensor = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0), freq=400000)
@@ -60,13 +61,15 @@ try:
         if mz < min_z: min_z = mz
         if mz > max_z: max_z = mz
 
-        toon([
-            "AUTO-KALIBRATIE",
-            f"{i + 1}/{AANTAL}",
-            f"X {min_x:6.1f}/{max_x:6.1f}",
-            f"Y {min_y:6.1f}/{max_y:6.1f}",
-            f"Z {min_z:6.1f}/{max_z:6.1f}",
-        ])
+        # Update OLED alleen elke N metingen (I2C framebuffer-push is traag)
+        if (i + 1) % OLED_INTERVAL == 0 or i == AANTAL - 1:
+            toon([
+                "AUTO-KALIBRATIE",
+                f"{i + 1}/{AANTAL}",
+                f"X{min_x:+.0f}/{max_x:+.0f}",
+                f"Y{min_y:+.0f}/{max_y:+.0f}",
+                f"Z{min_z:+.0f}/{max_z:+.0f}",
+            ])
         print(
             f"[{i + 1}/{AANTAL}] "
             f"x=({min_x:.1f},{max_x:.1f}) y=({min_y:.1f},{max_y:.1f}) z=({min_z:.1f},{max_z:.1f})"
@@ -86,9 +89,12 @@ offset_y = (max_y + min_y) / 2
 offset_z = (max_z + min_z) / 2
 
 # Soft-iron schaling (de vervorming van de cirkel)
-chord_x = (max_x - min_x) / 2 or 1e-6  # voorkom deling door nul
-chord_y = (max_y - min_y) / 2 or 1e-6
-chord_z = (max_z - min_z) / 2 or 1e-6
+chord_x = (max_x - min_x) / 2
+chord_y = (max_y - min_y) / 2
+chord_z = (max_z - min_z) / 2
+if chord_x == 0: chord_x = 1e-6  # voorkom deling door nul
+if chord_y == 0: chord_y = 1e-6
+if chord_z == 0: chord_z = 1e-6
 gemiddelde_straal = (chord_x + chord_y + chord_z) / 3
 
 scale_x = gemiddelde_straal / chord_x
