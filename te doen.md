@@ -7,11 +7,11 @@
 # De micropython code voor de GY9250 is gedownload van de awesome-micropython website (auteur Tuupola).
 
  1. Deze micropython code voor de GY9250 gaat op core 1 van de RP2350 draaien, zodat de overige modules er geen last van hebben (rekenintensief).
- 2. In het main programma kan gekozen worden of we `GY9250_basic.py` library functie importeren (alleen kompas functie) of de `GY9250_fusion.py` library functie (kompas plus accelerator correctie gaan gebruiken)
+ 2. In het main programma kan gekozen worden of we `GY9250_basic.py` library functie importeren (alleen kompas functie) of de `GY9250_fusion.py` library functie (kompas plus accelerator correctie gaan gebruiken). **Let op:** deze bestanden bestaan nog niet in de repo — bij aanmaken de naamgeving consistent houden met de verwijzingen in dit document en in `globale_specificatie.md`.
  3. Zorg voor veilige data-uitwisseling tussen core 0 en core 1 (bv. een lock of atomische lees/schrijf) voor de gedeelde kompaswaarde — dit is niet automatisch veilig met `_thread` op de RP2350.
  4. De code moet nog gereviewd en getest worden.
  5. De bedoeling van het kompas is om het karretje in de juiste richting te laten rijden. De ondergrond kan oneffen zijn en de wielomtrek kan een klein beetje afwijken. Het kompas kan dan gebruikt worden om de koers te corrigeren.
- 6. `Calibrate_GY9250.py` wordt eenmalig gebruikt om de invloed van de stappenmotoren (hun magnetisch veld) op de kompasafwijking te bepalen, bijvoorbeeld door het karretje een aantal maal rond te laten draaien. De gevonden afwijking wordt weggeschreven naar een correctiebestand en tijdens normaal bedrijf door `GY9250_basic.py`/`GY9250_fusion.py` toegepast om de kompaswaarde te compenseren.
+ 6. De kalibratie van de GY9250 (hard-iron offset + soft-iron scale) wordt uitgevoerd via `tests/test_gy9250_auto_calibrate.py`. Dit script laat het karretje ronddraaien en bepaalt de magnetometer-offsets. De gevonden kalibratie wordt opgeslagen in de centrale configuratie (`config.json`) en tijdens normaal bedrijf door `GY9250_basic.py`/`GY9250_fusion.py` toegepast om de kompaswaarde te compenseren.
  7. De kalibratiewaarden (het correctiebestand uit punt 6) opslaan op de RP2350 (zie centrale configuratie, sectie hierboven).
  8. De kompasroutine wordt maar eens per 100/200 ms aangeroepen dit afhankelijk van de tijd nodig om de berekeningen af te ronden; zodra bekend is hoelang de berekening duurt leggen we vast wat de cyclustijd wordt. De resterende tijd binnen die cyclus op core 1 is beschikbaar voor de displayafhandeling (zie volgende sectie).
 
@@ -44,7 +44,7 @@
  1. Het laser kruis kan vanuit het hoofdprogramma aangestuurd worden met pwm regeling. pwm 0 is uit en pwm max is 100%
 
 # fouten in de ldr-scan routine oplossen
- 1. Nu moet voordat de ldr_scan start de ultrasoonroutine gestopt worden. Dit vermoedelijk vanwege een PIO-conflict. Het verplaatsen van de ldr_scan en ultrasoonroutine naar verschillende PIO blokken moet dit probleem verhelpen.
+ 1. ~~Nu moet voordat de ldr_scan start de ultrasoonroutine gestopt worden.~~ **Opgelost**: ldr_scan gebruikt nu SM8 (PIO2 SM0), ultrasoon gebruikt SM4 (PIO1 SM0) — aparte PIO-blokken, geen conflict meer.
  2. De ldr-scan moet tijdens de scan de twee LDR-waarden apart opnemen en daarna de richting van de lichtbron bepalen (nu wordt gepiekt op het gemiddelde van beide LDR's, dat is de bug). De LDR's zijn in het horizontale vlak uit elkaar geplaatst, er ontstaan tijdens het scannen dus twee maxima's. De gewenste richting ligt dus tussen de twee maxima's. Het kruispunt waar LDR A ≈ LDR B is het midden, dit na correctie van het gain-verschil tussen beide LDR's.
  3. De gemeten waarden in een csv-bestand opslaan op de RP2350.
  4. Na het terugdraaien van de kar naar de lichtbron controleren of dit overeenkomt met de berekende waarden.
@@ -77,8 +77,8 @@
     - **n**: deze stap wordt overgeslagen, door naar de volgende kalibratie.
     - **y**: de kalibratie wordt uitgevoerd; het resultaat wordt getoond met de vraag of dit opgeslagen moet worden (y/n).
     - **x**: de gehele kalibratiesessie wordt direct beëindigd, met de vraag of de tot dan toe uitgevoerde kalibraties opgeslagen moeten worden.
- 3. De configuratie wordt bij start van de sessie ingelezen. Zodra tijdens een kalibratiestap daadwerkelijk een wijziging optreedt, wordt eerst de nog ongewijzigde (sessie-start-)configuratie weggeschreven naar `configuratie_oud` (eenmalige backup per sessie), en pas daarna de nieuwe waarde in het configuratiebestand opgeslagen.
- 4. Tijdens de kalibratiesessie toont de WS2812B-LED paars (zie WS2812B-sectie hieronder) en toont het display een tekst die aangeeft dat het systeem in kalibratiemodus staat.
+ 3. De configuratie wordt bij start van de sessie ingelezen. Zodra tijdens een kalibratiestap daadwerkelijk een wijziging optreedt, wordt eerst de nog ongewijzigde (sessie-start-)configuratie weggeschreven naar `config_backup.json` (eenmalige backup per sessie), en pas daarna de nieuwe waarde in het configuratiebestand (`config.json`) opgeslagen.
+ 4. Tijdens de kalibratiesessie toont de WS2812B-LED paars (zie WS2812B-sectie hierboven) en toont het display een tekst die aangeeft dat het systeem in kalibratiemodus staat.
  5. Deze sectie is de overkoepelende opstartflow die de GY9250-stappenmotorkalibratie (punt 6 hierboven), de servo-kalibratieroutine en de LDR-kalibratieroutine na elkaar aanroept.
 
 # updaten globale_specificatie.md

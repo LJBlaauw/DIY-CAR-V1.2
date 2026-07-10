@@ -85,7 +85,7 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 
 ### `lib/servo/servo_crl.py`
 
-`ServoController` klasse voor 3× MG996R servo + kruishaarlaser.
+`ServoController` klasse voor 3× MG996R servo (servo 1, 2, 4) + kruishaarlaser.
 
 **Init:** `sc = ServoController()` — alle servo's gaan direct naar rustpositie.
 
@@ -108,7 +108,7 @@ Deze waarden worden vervangen door de automatisch of handmatige instelling van d
 | Methode | Beschrijving |
 |---|---|
 | `servo_pos(nr, graden, graden_per_sec)` | Relatief t.o.v. rust (nooit onder rust). Voorbeeld: `servo_pos(1, 30)` → rust+30° |
-| `servo_rest(nr=None)` | Terug naar rust. Zonder argument: volgorde 4→1→2 @ 20°/s |
+| `servo_rest(nr=None)` | Terug naar rust. Zonder argument: volgorde 4→1→2→3 @ 20°/s |
 | `set_rest_pct(nr, pct)` | Stel rustpositie in als duty-% |
 | `servo_cur(mA, graden_per_sec)` | **SETPOINT-modus**: PI-regelaar houdt servo 4 op ingestelde stroom |
 | `servo_cur_limit(mA)` | **LIMIT-modus**: positie is leidend, stroom wordt begrensd door PI-limiter |
@@ -164,7 +164,7 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 | Functie | Beschrijving |
 |---|---|
-| `scan(dir, speed_cm_s, graden, start_graden, go_max, exell, out_csv)` | Voer scan uit. Retourneert dict met resultaten en piekpositie |
+| `scan(dir, speed_cm_s, graden, start_graden, go_max, excel, out_csv)` | Voer scan uit. Retourneert dict met resultaten en piekpositie |
 | `measure_now(n=8)` | Direct LDR-waarde lezen (%, tuple A/B) |
 | `attach_stepper_reader(fn)` | Koppel stepper.pio_pos1 als positiebron voor de scan |
 
@@ -192,11 +192,11 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 - [ ] `lib/LDR/ldr_scan_isr.py` — scan werkt niet correct; controleren of het toepassen van het derde PIO blok dit probleem ondervangt
 - [ ] Gyroscoop/kompas (GY9250) — nog niet geïmplementeerd, Er is code toegevoegd voor de GY9250 (basic en fusion) moet getest worden
 - [ ] OLED (SSD1306) — nog niet geïmplementeerd (voorstel van implementatie in de te doen.md file)
-- [ ] GPIO-tabel controleren op nieuwe RP2350 print (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
+- [x] GPIO-tabel gecontroleerd en geverifieerd tegen KiCad netlist V1.2 (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
 - [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module, de test all bewaren voor een snelle controlle test.
 
 ---
 
 ## Afhankelijkheden
 
-Standaard MicroPython voor RP2350. Geen externe libraries vereist.
+Standaard MicroPython voor RP2350. Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython), `ssd1306` (SSD1306 OLED driver).
