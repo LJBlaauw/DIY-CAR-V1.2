@@ -1,5 +1,3 @@
-`python
-
 # deltat.py time difference calculation for sensor fusion
 # Released under the MIT License (MIT)
 # Copyright (c) 2018 Peter Hinch
@@ -75,4 +73,3 @@ class DeltaT():
         dt = self.timediff(ts, self.start_time)
         self.start_time = ts
         return dt
-`

@@ -1,77 +1,72 @@
-`python
-
 import machine
 import time
 import _thread
-import math
 from mpu9250 import MPU9250
-from fusion import Fusion  # Importeer het geavanceerde filter
+from ak8963 import AK8963
+from fusion import Fusion  # Importeer het complementaire fusion-filter
 
 actuele_koers = 0.0
+
 
 def geavanceerd_kompas_core1():
     global actuele_koers
 
     # Initialiseer sensor
-    i2c = machine.I2C(0, scl=machine.Pin(5), sda=machine.Pin(4), freq=400000)
-    sensor = MPU9250(i2c)
+    # GY9250 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
+    i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 
-    # Uw kalibratiedata injecteren
-    sensor.ak8963.offset = (-24.5, 12.3, -5.1)
-    sensor.ak8963.scale = (0.95, 1.02, 1.03)
+    # Uw kalibratiedata injecteren (uit Calibrate_GY9250.py)
+    dummy = MPU9250(i2c)  # opent de I2C-bypass naar de AK8963
+    ak8963 = AK8963(
+        i2c,
+        offset=(-24.5, 12.3, -5.1),
+        scale=(0.95, 1.02, 1.03),
+    )
+    sensor = MPU9250(i2c, ak8963=ak8963)
 
-    # Start het geavanceerde Fusion filter
+    # Start het fusion-filter. Fusion houdt zelf de verstreken tijd (dt)
+    # tussen updates bij via deltat.DeltaT (time.ticks_us onder MicroPython).
     fuse = Fusion()
 
-    # Belangrijk: Geavanceerde filters moeten exact weten hoeveel tijd er tussen de metingen zit
-    last_time = time.ticks_us()
-
-    print("Core 1: Geavanceerde Madgwick Sensor Fusion gestart")
+    print("Core 1: Sensor fusion (complementair filter) gestart")
 
     while True:
         try:
-            # Lees ALLE 9 assen uit (essentieel voor geavanceerde filtering)
+            # Lees ALLE 9 assen uit (essentieel voor tilt-gecompenseerde koers)
             accel = sensor.acceleration  # (ax, ay, az)
-            gyro = sensor.gyro          # (gx, gy, gz)
-            mag = sensor.magnetic       # (mx, my, mz)
+            gyro = sensor.gyro           # (gx, gy, gz)
+            mag = sensor.magnetic        # (mx, my, mz)
 
-            # Bereken exact de verstreken tijd (dt) sinds de vorige meting
-            now = time.ticks_us()
-            dt = time.ticks_diff(now, last_time) / 1000000.0
-            last_time = now
+            # Voer alle data in het filter. Dit berekent roll, pitch en een
+            # kantelgecompenseerde, gyro-gladgestreken koers.
+            fuse.update(accel, gyro, mag)
 
-            # Voer alle data in het geavanceerde filter.
-            # Dit filter berekent de exacte 3D-oriëntatie, inclusief kantelcompensatie!
-            fuse.update(accel, gyro, mag, dt)
-
-            # fuse.heading geeft de exacte, stabiele koers in graden (0-360)
-            # Volledig gecorrigeerd voor trillingen, hellingen en motorruis
+            # fuse.heading geeft de gefilterde koers in graden (0-360)
             actuele_koers = fuse.heading
 
         except Exception:
             pass
 
-        # Geavanceerde filters werken het best als ze heel snel achter elkaar meten
-        time.sleep_ms(5) # Update op ca. 200 Hz, de RP2350 kan dit makkelijk aan
+        # Snel achter elkaar meten voor een stabiel filterresultaat
+        time.sleep_ms(5)  # ca. 200 Hz, de RP2350 kan dit makkelijk aan
+
 
 # Start op Core 1
 _thread.start_new_thread(geavanceerd_kompas_core1, ())
 
 # Core 0 code blijft exact hetzelfde...
 print("Core 0: Motorbesturing gereed")
-time.sleep(1) # Geef Core 1 kort de tijd om op te starten [4]
+time.sleep(1)  # Geef Core 1 kort de tijd om op te starten
 
 while True:
-    # Haal de meest actuele, stabiele richting op uit de globale variabele [4]
+    # Haal de meest actuele, stabiele richting op uit de globale variabele
     robot_richting = actuele_koers
 
     # --- MOTOR LOGICA HIER ---
-    # Gebruik 'robot_richting' om uw NEMA 17 motoren bij te sturen tijdens het rijden [4]
+    # Gebruik 'robot_richting' om uw NEMA 17 motoren bij te sturen tijdens het rijden
     # ... uw motorcode hier ...
 
-    # De gevraagde printopdracht in Core 0:
     print("Live richting robot:", robot_richting)
 
-    # Core 0 mag op zijn eigen tempo draaien (bijv. 10 Hz) [4]
+    # Core 0 mag op zijn eigen tempo draaien (bijv. 10 Hz)
     time.sleep_ms(100)
-`

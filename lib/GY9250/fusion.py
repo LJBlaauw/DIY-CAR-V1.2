@@ -1,80 +1,83 @@
-`python
+"""
+fusion.py - Sensor fusion voor MPU9250 (accelerometer + gyro + magnetometer).
 
-import machine
-import time
-import _thread
-import math
-from mpu9250 import MPU9250
+Complementair filter met kantelcompensatie:
+- roll/pitch: fusie van accelerometer (stabiel op lange termijn) en
+  gecumuleerde gyro-rotatie (ruisvrij op korte termijn).
+- heading: magnetometer wordt met roll/pitch kantelgecompenseerd en
+  vervolgens gefuseerd met de gyro-z rotatiesnelheid, zodat trillingen en
+  kortstondige magnetische storing (bv. van steppermotoren) worden
+  weggefilterd.
 
-# Globale variabele voor de actuele, gecorrigeerde koers (heading)
-# Core 1 schrijft hier continu in, Core 0 leest dit live uit
-actuele_koers = 0.0
+Gebruikt deltat.DeltaT voor de tijdmeting tussen twee update()-aanroepen.
+"""
 
-def verwerk_kompas_core1():
-    global actuele_koers
+from math import atan2, sqrt, degrees, radians, sin, cos
+from deltat import DeltaT
 
-    # 1. Initialiseer I2C altijd BINNEN de core-functie
-    i2c = machine.I2C(0, scl=machine.Pin(5), sda=machine.Pin(4), freq=400000)
-    sensor = MPU9250(i2c)
 
-    # 2. VUL HIER UW EIGEN KALIBRATIERESULTATEN IN:
-    # Vervang deze tuples door de getallen uit uw kalibratiescript
-    sensor.ak8963.offset = (-24.5, 12.3, -5.1)      # Hard-iron offsets (X, Y, Z)
-    sensor.ak8963.scale = (0.95, 1.02, 1.03)        # Soft-iron schaling (X, Y, Z)
+class Fusion:
+    """Complementair filter dat roll, pitch en (kantelgecompenseerde) heading bijhoudt."""
 
-    # Variabele voor het complementair filter
-    # We starten op 0.0, het filter stabiliseert zichzelf snel
-    gefilterde_hoek = 0.0
-    dt = 0.02  # Looptijd van de loop (20 milliseconden = 50 Hz)
+    # Magnetische declinatie in graden. Pas aan voor uw locatie indien een
+    # nauwkeurige koers t.o.v. het ware noorden nodig is.
+    declination = 0.0
 
-    print("Core 1: Gekalibreerde kompas-taak actief op 50Hz")
+    def __init__(self, timediff=None, gyro_weight=0.98):
+        self.gyro_weight = gyro_weight
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.heading = 0.0
+        self.deltat = DeltaT(timediff)
+        self._started = False
 
-    while True:
-        try:
-            # Lees de gecorrigeerde magnetometer- en gyro-waarden uit
-            # De driver past hierboven automatisch uw offsets toe
-            mx, my, mz = sensor.magnetic
-            gx, gy, gz = sensor.gyro  # gz is de rotatiesnelheid om de Z-as (rad/s)
+    def update(self, accel, gyro, mag, ts=None):
+        ax, ay, az = accel
+        gx, gy, gz = gyro
+        mx, my, mz = mag
 
-            # Converteer de gyro-rotatie van radialen naar graden per seconde
-            gyro_z_graden = gz * (180.0 / math.pi)
+        dt = self.deltat(ts)
 
-            # Bereken de ruwe magnetische hoek in graden (0 tot 360)
-            ruwe_hoek = math.atan2(my, mx) * (180.0 / math.pi)
-            if ruwe_hoek < 0:
-                ruwe_hoek += 360.0
+        # Roll/pitch uit de accelerometer (in graden)
+        acc_roll = degrees(atan2(ay, az))
+        denom = sqrt(ay * ay + az * az)
+        acc_pitch = degrees(atan2(-ax, denom)) if denom else 0.0
 
-            # --- COMPLEMENTAIR FILTER (Sensor Fusion) ---
-            # Dit filtert de PWM-storing van uw TMC2209 drivers effectief weg.
-            # 96% gewicht naar de snelle gyroscoop, 4% naar de corrigerende magneetsensor.
-            gefilterde_hoek = 0.96 * (gefilterde_hoek + gyro_z_graden * dt) + 0.04 * ruwe_hoek
-            gefilterde_hoek = gefilterde_hoek % 360.0
+        was_started = self._started
 
-            # Schrijf het resultaat atomair naar de globale variabele
-            actuele_koers = gefilterde_hoek
+        if not was_started:
+            # Eerste meting: nog geen dt beschikbaar om de gyro te integreren
+            self.roll = acc_roll
+            self.pitch = acc_pitch
+            self._started = True
+        else:
+            gyro_roll = self.roll + degrees(gx) * dt
+            gyro_pitch = self.pitch + degrees(gy) * dt
+            w = self.gyro_weight
+            self.roll = w * gyro_roll + (1 - w) * acc_roll
+            self.pitch = w * gyro_pitch + (1 - w) * acc_pitch
 
-        except Exception as e:
-            # Voorkom dat Core 1 crasht bij een incidentele I2C-glitch door de motoren
-            pass
+        # Kantelcompensatie van de magnetometer met de huidige roll/pitch
+        roll_r = radians(self.roll)
+        pitch_r = radians(self.pitch)
 
-        time.sleep_ms(20) # 50 Hz updatefrequentie
+        mx_c = mx * cos(pitch_r) + mz * sin(pitch_r)
+        my_c = (
+            mx * sin(roll_r) * sin(pitch_r)
+            + my * cos(roll_r)
+            - mz * sin(roll_r) * cos(pitch_r)
+        )
 
-# --- HOOFDPROGRAMMA (Draait op Core 0) ---
+        mag_heading = (degrees(atan2(-my_c, mx_c)) + self.declination) % 360.0
 
-# Start de kompasberekening op Core 1
-_thread.start_new_thread(verwerk_kompas_core1, ())
+        if not was_started:
+            # Eerste meting: heading direct op de magnetometer-uitlezing zetten
+            # i.p.v. langzaam vanaf 0 te laten toegroeien.
+            self.heading = mag_heading
+        else:
+            # Circulaire fusie van gyro-z-integratie en magnetometer-heading
+            gyro_heading = (self.heading + degrees(gz) * dt) % 360.0
+            diff = (mag_heading - gyro_heading + 540) % 360 - 180  # kortste hoekverschil
+            self.heading = (gyro_heading + (1 - self.gyro_weight) * diff) % 360.0
 
-print("Core 0: Motorbesturing gereed")
-time.sleep(1) # Geef Core 1 kort de tijd om op te starten
-
-while True:
-    # Haal de meest actuele, stabiele richting op
-    robot_richting = actuele_koers
-
-    # --- MOTOR LOGICA HIER ---
-    # Gebruik 'robot_richting' om uw NEMA 17 motoren bij te sturen tijdens het rijden
-    # Als de richting afwijkt van uw doelkoers, pas de snelheid van de linkse of rechtse motor aan.
-
-    print("Live richting robot:", robot_richting)
-    time.sleep_ms(100) # Core 0 mag op zijn eigen tempo draaien
-`
+        return self.heading
