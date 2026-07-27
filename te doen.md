@@ -48,6 +48,9 @@
  2. De ldr-scan moet tijdens de scan de twee LDR-waarden apart opnemen en daarna de richting van de lichtbron bepalen (nu wordt gepiekt op het gemiddelde van beide LDR's, dat is de bug). De LDR's zijn in het horizontale vlak uit elkaar geplaatst, er ontstaan tijdens het scannen dus twee maxima's. De gewenste richting ligt dus tussen de twee maxima's. Het kruispunt waar LDR A ≈ LDR B is het midden, dit na correctie van het gain-verschil tussen beide LDR's.
  3. De gemeten waarden in een csv-bestand opslaan op de RP2350.
  4. Na het terugdraaien van de kar naar de lichtbron controleren of dit overeenkomt met de berekende waarden.
+ 5. **Volledige-omwentelingsscan (370°) i.p.v. pre-roll.** Niet eerst terugdraaien, maar direct 370° in één richting draaien. Een volle omwenteling bevat altijd het maximum; de 10° overlap houdt een piek rond 0°/360° van de rand af. De pre-roll (`start_graden`/terugdraaien vóór de scan) vervalt. Randvoorwaarde: de kar moet vrij op zijn as kunnen draaien zonder kabels die bij 360°+ mee-twisten.
+ 6. **Kortste weg naar de gevonden richting.** Na 370° op eindhoek 370° is terugdraaien naar piekhoek θ gelijk aan `370 − θ` en doordraaien aan `(θ − 10) mod 360`; kies de kleinste. Laat de laatste graden altijd in dezelfde richting eindigen (bij terugdraaien iets voorbij en dan vooruit terug), zodat de backlash constant blijft.
+ 7. **Closed-loop uitlijnen via null-seek op A−B.** Grof naar de verwachte piekpositie op stappen, daarna fijn bijregelen met `measure_now()`. Zoek de **nuldoorgang van A−B** (na gain-correctie), niet de opgeslagen maximum-magnitude: het verschilsignaal is scherper en ongevoelig voor helderheidsdrift, terwijl een magnitude-drempel te vroeg stopt doordat de bewegings-scan de piek uitsmeert. Begrens de fijnregeling tot een venster (bv. ±15°) rond de verwachte positie en val bij geen duidelijke nuldoorgang terug op de stappen-target. Dit corrigeert stepper-slip (vervangt/verfijnt de huidige stappen-gebaseerde `backtrack` en punt 4 hierboven).
 
 # routine voor de kalibratie servomotoren toevoegen
 **De servomotoren hebben nu vast ingestelde rustwaarden, dit moet via een kalibratieroutine**
@@ -80,6 +83,29 @@
  3. De configuratie wordt bij start van de sessie ingelezen. Zodra tijdens een kalibratiestap daadwerkelijk een wijziging optreedt, wordt eerst de nog ongewijzigde (sessie-start-)configuratie weggeschreven naar `config_backup.json` (eenmalige backup per sessie), en pas daarna de nieuwe waarde in het configuratiebestand (`config.json`) opgeslagen.
  4. Tijdens de kalibratiesessie toont de WS2812B-LED paars (zie WS2812B-sectie hierboven) en toont het display een tekst die aangeeft dat het systeem in kalibratiemodus staat.
  5. Deze sectie is de overkoepelende opstartflow die de GY9250-stappenmotorkalibratie (punt 6 hierboven), de servo-kalibratieroutine en de LDR-kalibratieroutine na elkaar aanroept.
+
+# stepper omzetten naar 1/64 microstepping (12800 stappen/omw)
+**De microstepping is van 1/8 (1600 stappen/omw) naar 1/64 (12800 stappen/omw) gebracht, o.a. om de stepper-ramp gladder en eenvoudiger te kunnen implementeren (kleinere snelheidssprong per puls).**
+ 1. MS-bedrading fysiek verifiëren: TMC2209 MS1 → GND, MS2 → +5V (10 kΩ pull-ups verwijderd). Waarheidstabel: MS2=H/VIO, MS1=L/GND → 1/64.
+ 2. In `lib/stepper/stepper.py` `STEPS_REV = 12800` zetten (`CM_PER_STEP ≈ 16,4 µm/stap`).
+ 3. `OVERHEAD` in `speed_to_delay()` hermeten: bij 8× meer pulsen wordt de vaste overhead een groter aandeel van de delay (~11% bij 30 cm/s) → snelheidsafwijking. Alternatief/aanvullend: `F_PIO` verhogen (fijnere resolutie, verwaarloosbare overhead).
+ 4. Randvoorwaarde bij het verhogen van `F_PIO`: de STEP-puls moet ≥ ± 100 ns hoog/laag blijven (TMC2209-minimum); eventueel een extra `nop` in de PIO-puls houden.
+
+# rijden naar de lichtbron met LDR-correctie
+**Tijdens het rijden naar de lichtbron wordt continu gecorrigeerd op koersafwijking: het verschil tussen de twee LDR-waarden (na gain-correctie) naar nul brengen (A ≈ B = recht op de bron).**
+ 1. Gekozen aanpak: segmentgewijs (past op de bestaande fire-and-forget + IRQ-stop stepper-architectuur). Rij een kort segment → meet beide LDR's → buiten een deadband een kleine, in hoek begrensde `rotate()`-correctie richting de helderste kant → herhaal.
+ 2. Stop op ingestelde afstand via de ultrasoonsensor (draait onafhankelijk in de achtergrond, SM4).
+ 3. Afhankelijk van de LDR-kalibratie (correctie gevoeligheidsverschil A/B) — zonder goede kalibratie stuurt de kar scheef.
+ 4. Arbitrage met het kompas vastleggen: LDR is leidend tijdens de nadering; de GY9250-koerscorrectie is voor de terugweg. Beide sturen niet tegelijk.
+
+# microdot-websocket voor besturing via de browser (Pico 2 W)
+**De kar (Pico 2 W, onboard CYW43-WiFi) wordt via een standaard browser bediend en uitgelezen met een microdot-webserver + websocket. Draait op core 0 naast de besturing; core 1 blijft voor GY9250 + display.**
+ 1. Sensoren uitlezen (~5–10 Hz): LDR A/B in %, ultrasoon-afstand in cm (of time-out), kompasrichting in graden, servoposities in %, stepper-snelheid/richting/afgelegde weg.
+ 2. Directe rijbesturing: vooruit/achteruit/links/rechts + snelheid, met noodstop en een deadman/heartbeat (bij verbroken websocket of uitblijvende heartbeat stopt de kar automatisch).
+ 3. Hoog-niveau commando's: LDR-scan, rijden-naar-licht, grijpen, terugkeren, kalibratiemodus starten/stoppen.
+ 4. Async-refactor vereist: de besturing is nu blokkerend (busy-wait `while sm.active(): pass`, blokkerende `scan()`/ADC-lussen) en verhongert de asyncio-event-loop. Nodig: coöperatieve taken (`await asyncio.sleep`) of een commandowachtrij + gedeelde state tussen webserver en control-task.
+ 5. Netwerk: AP-modus (kar als eigen accesspoint) heeft de voorkeur; station-modus optioneel. SSID/wachtwoord in de centrale `config.json`.
+ 6. Geheugen bewaken (microdot + asyncio + lwIP + bestaande modules op ~520 KB RAM is krap) en commandovalidatie/veiligheid borgen.
 
 # updaten globale_specificatie.md
 **Deze te-doen-lijst betekent dat de globale_specificatie.md na elke succesvol afgeronde stap in deze lijst aangepast moet worden.**

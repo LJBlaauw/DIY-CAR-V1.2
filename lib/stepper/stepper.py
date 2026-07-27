@@ -36,10 +36,10 @@ def stepper_counter():
 # -----------------------------------------
 # Constantes en afleiding
 # -----------------------------------------
-F_PIO = 3_000_000
+F_PIO = 3_000_000          # mag verhoogd worden (fijnere delay-resolutie); STEP-puls ≥ ±100 ns (TMC2209) houden
 WHEEL_CIRC   = 20.94       # cm
-STEPS_REV    = 1600        # 1/8 microstepping
-CM_PER_STEP  = WHEEL_CIRC / STEPS_REV
+STEPS_REV    = 12800       # 1/64 microstepping (TMC2209: 200 volle stappen × 64; MS1→GND, MS2→+5V)
+CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 16,4 µm/stap
 
 # -----------------------------------------
 # Pin definitie

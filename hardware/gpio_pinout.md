@@ -46,19 +46,22 @@ De schakeling gebruikt **TMC2209** drivers (U1 en U2). De KiCad footprint is gel
 
 ### Microstepping instelling (A4988)
 
-MS-pinnen zijn hardwired via pull-up/pull-down weerstanden:
+MS-pinnen zijn hardwired (TMC2209). De oorspronkelijke 10 kΩ pull-ups zijn verwijderd; MS1 en MS2 worden nu vast gezet voor **1/64 microstepping**:
 
-| Pin | Verbinding | Waarde | Toestand |
-|-----|-----------|--------|---------|
-| MS1 | R11 (10 kΩ → +5V) / R12 (0R DNP → GND) | H | Hoog |
-| MS2 | R7 (10 kΩ → +5V) / R8 (0R DNP → GND) | H | Hoog |
-| MS3 | R5 (10 kΩ → +5V) / R6 (0R → GND) | L | Laag |
+| Pin | Verbinding | Toestand |
+|-----|-----------|---------|
+| MS1 | → GND | Laag |
+| MS2 | → +5V | Hoog |
 
-A4988 waarheidstabel: MS1=H, MS2=H, MS3=L → **1/8 microstepping**
+TMC2209 waarheidstabel (MS2, MS1): GND/GND → 1/8 · GND/VIO → 1/32 · **VIO/GND → 1/64** · VIO/VIO → 1/16.
 
-→ 200 stappen/omw × 8 = **1600 stappen per omwenteling**
+Met MS2=H (VIO), MS1=L (GND) → **1/64 microstepping**
 
-Zelfde geldt voor U2 (R18/R19, R20/R21, R23/R24 met dezelfde DNP-logica).
+→ 200 stappen/omw × 64 = **12800 stappen per omwenteling**
+
+Zelfde geldt voor U2.
+
+> **Historie:** eerder gedocumenteerd als 1/8 (1600 stappen/omw) op basis van de A4988-footprintlogica. De feitelijke driver is een TMC2209 en de MS-bedrading is aangepast naar 1/64 om de stepper-ramp gladder te kunnen implementeren.
 
 ## Stroomkring grijper-servo (GPIO28)
 
@@ -123,4 +126,4 @@ De falling edge van het 50 Hz servo-PWM signaal triggert de servo-update ISR.
 - [x] GPIO26–27 LDR (J8, J9) ✓
 - [x] GPIO28 stroomsensor via U3 OPA2705 ✓
 - [x] Stepper driver type: **TMC2209** (KiCad footprint gelabeld A4988; geplaatste component is TMC2209) ✓
-- [x] Microstepping: 1/8 (MS1=H, MS2=H, MS3=L) ✓
+- [x] Microstepping: **1/64** (TMC2209, MS2=H/VIO, MS1=L/GND) → 12800 stappen/omw — MS-bedrading fysiek te verifiëren
