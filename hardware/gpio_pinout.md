@@ -29,8 +29,8 @@
 | GPIO20 | OUT | Trigger ultrasoonsensor | J13 pin 3 — net `/Trig` | |
 | GPIO21 | — | NC | — | |
 | GPIO22 | OUT (PWM) | Servo 4 PWM (grijper) | J10 pin 1 — net `Net-(J10-Pin_1)` | Met stroombeperking via PI; stroomsensor op J10 pin 3 |
-| GPIO26 | IN (ADC0) | LDR A | J8 (JST-XH 2) — net `Net-(J8-Pin_1)` | Pull-down R29 (10 kΩ) naar GNDA; filter C13 |
-| GPIO27 | IN (ADC1) | LDR B | J9 (JST-XH 2) — net `Net-(J9-Pin_1)` | Pull-down R30 (10 kΩ) naar GNDA; filter C15 |
+| GPIO26 | IN (ADC0) | LDR A | J8 (JST-XH 2) — net `Net-(J8-Pin_1)` | Pull-up R29 (1 kΩ) naar 3V3; filter C13 |
+| GPIO27 | IN (ADC1) | LDR B | J9 (JST-XH 2) — net `Net-(J9-Pin_1)` | Pull-up R30 (1 kΩ) naar 3v3; filter C15 |
 | GPIO28 | IN (ADC2) | Stroomsensor grijper | R22 (1 kΩ) ← U3B output — net `/I_Servo` | Filter C10; zie stroomkring hieronder |
 
 ## Stepper drivers
@@ -41,10 +41,10 @@ De schakeling gebruikt **TMC2209** drivers (U1 en U2). De KiCad footprint is gel
 
 | Connector | GPIO-kant | Motor-kant | Motor |
 |-----------|-----------|------------|-------|
-| J4 (JST-XH 4) | U1 A4988 | 1A / 1B / 2A / 2B | Stepper A |
-| J5 (JST-XH 4) | U2 A4988 | 1A / 1B / 2A / 2B | Stepper B |
+| J4 (JST-XH 4) | U1 TMC2209 | 1A / 1B / 2A / 2B | Stepper A |
+| J5 (JST-XH 4) | U2 TMC2209 | 1A / 1B / 2A / 2B | Stepper B |
 
-### Microstepping instelling (A4988)
+### Microstepping instelling (TMC2209)
 
 MS-pinnen zijn hardwired (TMC2209). De oorspronkelijke 10 kΩ pull-ups zijn verwijderd; MS1 en MS2 worden nu vast gezet voor **1/64 microstepping**:
 

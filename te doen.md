@@ -71,7 +71,9 @@
 
 # voorstel maken voor het toevoegen van een ramp voor de stepper motors
 **Nu wordt direct een snelheid opgegeven voor de stappenmotor; als de massatraagheid te groot is zal de kar niet in beweging komen. Nu loopt het aansturen en meten van de afgelegde weg 100% in de PIO zonder CPU-overhead (behalve een eenmalige interrupt als de targetpositie gehaald is)**
- 1. Is er een lineaire versnellingsregeling mogelijk die geen of minimale CPU-overhead nodig heeft? Om dit goed te doen zal de steppuls-timing tussentijds steeds veranderd moeten worden. Voorgaande pogingen waren niet succesvol. Dus alleen een werkingsprincipe voorstellen, nog niet implementeren.
+ 1. ~~Is er een lineaire versnellingsregeling mogelijk die geen of minimale CPU-overhead nodig heeft?~~ **Uitgewerkt en geïmplementeerd** in [`lib/stepper/stepper_ramp.py`](lib/stepper/stepper_ramp.py); werkingsprincipe volledig beschreven in [globale_specificatie.md](globale_specificatie.md). Antwoord: ja. Elk FIFO-woord codeert een heel segment `(aantal stappen, delay)` in plaats van één stap, waardoor een S-curve-ramp van 2200 stappen in 1 kB past en via DMA wordt afgespeeld. Zonder bijsturing loopt een complete beweging als **één DMA-transfer met nul CPU-overhead en één IRQ aan het eind** — dus precies het oude gedrag, mét ramp. Met bijsturing kost het ~0,1 % CPU.
+    - Waarom eerdere pogingen faalden: het was geen koppelprobleem (er is factor 8 marge bij VREF 1 V) maar een **synchronisme**-fout. Een snelheid direct commanderen betekent dat de rotor binnen één microstap van 78 µs naar de eindsnelheid moet springen; dat kan geen enkele motor volgen.
+    - Nog te doen op hardware: `TURN_SIGN` verifiëren, maximale startsnelheid en versnelling meten met de GY9250 als referentie, en `kp_ldr`/`kp_gyro` afstemmen.
 
 # calibraties
 **Alle calibraties worden in een aparte code sectie uitgevoerd, los van het besturingsprogramma. Bedoeling is dat alle losse kalibraties (GY9250-stappenmotorcompensatie, servo's, LDR's) na elkaar in één sessie doorlopen kunnen worden; kalibraties die niet nodig zijn worden overgeslagen.**
@@ -87,7 +89,7 @@
 # stepper omzetten naar 1/64 microstepping (12800 stappen/omw)
 **De microstepping is van 1/8 (1600 stappen/omw) naar 1/64 (12800 stappen/omw) gebracht, o.a. om de stepper-ramp gladder en eenvoudiger te kunnen implementeren (kleinere snelheidssprong per puls).**
  1. MS-bedrading fysiek verifiëren: TMC2209 MS1 → GND, MS2 → +5V (10 kΩ pull-ups verwijderd). Waarheidstabel: MS2=H/VIO, MS1=L/GND → 1/64.
- 2. In `lib/stepper/stepper.py` `STEPS_REV = 12800` zetten (`CM_PER_STEP ≈ 16,4 µm/stap`).
+ 2. ~~In `lib/stepper/stepper.py` `STEPS_REV = 12800` zetten.~~ **Gedaan.** `CM_PER_STEP ≈ 14,9 µm/stap` (na correctie van `WHEEL_CIRC` naar de gemeten 19,1 cm).
  3. `OVERHEAD` in `speed_to_delay()` hermeten: bij 8× meer pulsen wordt de vaste overhead een groter aandeel van de delay (~11% bij 30 cm/s) → snelheidsafwijking. Alternatief/aanvullend: `F_PIO` verhogen (fijnere resolutie, verwaarloosbare overhead).
  4. Randvoorwaarde bij het verhogen van `F_PIO`: de STEP-puls moet ≥ ± 100 ns hoog/laag blijven (TMC2209-minimum); eventueel een extra `nop` in de PIO-puls houden.
 
