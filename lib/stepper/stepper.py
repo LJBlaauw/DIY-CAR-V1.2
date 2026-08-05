@@ -36,10 +36,13 @@ def stepper_counter():
 # -----------------------------------------
 # Constantes en afleiding
 # -----------------------------------------
-F_PIO = 3_000_000          # mag verhoogd worden (fijnere delay-resolutie); STEP-puls ≥ ±100 ns (TMC2209) houden
-WHEEL_CIRC   = 20.94       # cm
+F_PIO = 15_000_000         # 150 MHz sysclk / 10 → integer klokdeler (geen fractionele jitter).
+                           # STEP-puls blijft 11 cycles = 733 ns ≥ 100 ns (TMC2209-minimum).
+WHEEL_CIRC   = 19.1        # cm — gemeten omtrek (was 20.94; die gaf 8,8% te korte afstanden)
+TRACK_WIDTH  = 13.6        # cm — spoorbreedte hart-op-hart, voor rotatie/koersberekening
 STEPS_REV    = 12800       # 1/64 microstepping (TMC2209: 200 volle stappen × 64; MS1→GND, MS2→+5V)
-CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 16,4 µm/stap
+CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 14,9 µm/stap
+STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # ≈ 159 stappen verschil per graad koers
 
 # -----------------------------------------
 # Pin definitie
