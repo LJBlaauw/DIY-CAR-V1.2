@@ -26,13 +26,34 @@ LDR_PIN_B            = 27
 LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB, intern gebruik)
 
 # geometrie
-WHEEL_BASE_CM        = 18.5
+# LET OP: dit moet dezelfde spoorbreedte zijn als TRACK_WIDTH in
+# lib/stepper/stepper_ramp.py. Stond eerder op 18.5, terwijl de gemeten
+# spoorbreedte hart-op-hart 13.6 cm is -> een gecommandeerde 370°-scan draaide
+# in werkelijkheid 503°. Empirische correctie (tyre-scrub, backlash) hoort in
+# ROT_SCALE, niet in deze waarde.
+WHEEL_BASE_CM        = 13.6
 ROT_SCALE            = 1.0
 
 # LDR instellingen
-LDR_R_FIXED_OHM      = 10_000
-LDR_R_MIN_OHM        = 60.0
+#
+# Topologie: R_FIXED is de PULL-UP naar 3V3, de LDR is de pull-down naar GND
+# (zie hardware/gpio_pinout.md, R29/R30). Fel licht -> lage LDR-weerstand ->
+# lage ADC-waarde. _adc_to_res_ohm() rekent daarop.
+#
+# R29/R30 zijn van 10 kΩ naar 1 kΩ gebracht: bij een LDR van 100-200 Ω gebruikte
+# 10 kΩ maar 0,97 % van de ADC-schaal (~40 werkelijke 12-bit codes), en met 1 kΩ
+# is dat 7,6 % — een factor 7,8. Dat is nodig voor de bundelas-bepaling, die een
+# Q-daling van ~34 LSB's moet zien; met 10 kΩ zou dat 4,4 LSB's zijn en dus in
+# de ruis verdwijnen. Over 20 Ω .. 20 kΩ blijft de resolutie 79-1024 werkelijke
+# 12-bit codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
+LDR_R_FIXED_OHM      = 1_000
+# Ondergrens van de procentschaal. Stond op 60 Ω, maar op de bundelas dichtbij
+# komt de cel daaronder -> de schaal klemde dan vast op 100 % en de eindfase had
+# geen informatie meer. 20 Ω geeft marge en houdt nog ~79 codes per e-voud.
+LDR_R_MIN_OHM        = 20.0
 LDR_R_MAX_OHM        = 20_000.0
+# LET OP: LDR_GAIN_B compenseerde ook de tolerantie van het oude 10 kΩ-paar.
+# Na het verwisselen van R29/R30 moet deze factor OPNIEUW gekalibreerd worden.
 LDR_GAIN_A           = 1.0
 LDR_GAIN_B           = 1.136
 
@@ -225,6 +246,14 @@ def measure_now(n=8):
 # =========================
 
 def _adc_to_res_ohm(adc_u16):
+    """ADC-waarde -> LDR-weerstand in ohm.
+
+    Deler: R_FIXED als pull-up naar 3V3, LDR als pull-down naar GND. Dan is
+        adc/FS = R_ldr / (R_ldr + R_FIXED)   ->   R_ldr = R_FIXED * adc/(FS-adc)
+    Klopt deze aanname niet, dan loopt de hele weerstands- en procentschaal
+    omgekeerd. Test: schijn licht op LDR A en lees de ruwe ADC. Gaat die naar
+    NUL, dan is de LDR de pull-down en is deze formule juist.
+    """
     if adc_u16 <= 0:
         adc_u16 = 1
     if adc_u16 >= 65535:

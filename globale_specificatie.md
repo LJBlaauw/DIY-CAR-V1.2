@@ -397,8 +397,13 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 **Config:**
 - `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
-- `WHEEL_BASE_CM = 18,5 cm` — afstand tussen wielen (voor graden→cm omrekening)
-- `LDR_GAIN_B = 1,136` — kalibratiefactor voor differentiële meting
+- `WHEEL_BASE_CM = 13,6 cm` — spoorbreedte hart-op-hart, voor graden→cm omrekening. **Stond op 18,5 cm**, terwijl de gemeten spoorbreedte 13,6 cm is; een gecommandeerde 370°-scan draaide daardoor in werkelijkheid **503°**. Moet gelijk blijven aan `TRACK_WIDTH` in `stepper_ramp.py`; empirische correctie (tyre-scrub, backlash) hoort in `ROT_SCALE`.
+- `LDR_R_FIXED_OHM = 1000` — pull-up naar 3V3 (R29/R30). **Was 10 000.** Bij een LDR van 100–200 Ω gebruikte 10 kΩ maar 0,97 % van de ADC-schaal (≈40 werkelijke 12-bit codes); met 1 kΩ is dat 7,6 % (4965 codes) — een factor 7,8. Dat is nodig voor de bundelas-bepaling, die een Q-daling van ~34 LSB's moet zien.
+- `LDR_R_MIN_OHM = 20` — ondergrens procentschaal. **Was 60**, waardoor de schaal dichtbij de bron vastklemde op 100 % en de eindfase geen informatie meer had.
+- `LDR_R_MAX_OHM = 20 000` — ongewijzigd. Over 20 Ω … 20 kΩ blijft de resolutie 79–1024 werkelijke codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
+- `LDR_GAIN_B = 1,136` — kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde ook de tolerantie van het oude 10 kΩ-weerstandspaar.
+
+**Delertopologie:** `R_FIXED` is de **pull-up** naar 3V3, de LDR de pull-down naar GND. Fel licht → lage LDR-weerstand → **lage** ADC-waarde. `_adc_to_res_ohm()` rekent daarop. Controle: schijn licht op LDR A en lees de ruwe ADC; gaat die naar **nul**, dan is de aanname juist.
 - `TARGET_SAMPLES_PER_DEG = 3` (bij 370° ≈ 1110 samples; ~13 KB buffers, ruim binnen RAM)
 
 **Publieke functies:**
@@ -673,7 +678,11 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [ ] `lib/stepper/stepper_ramp.py` op hardware testen: `TURN_SIGN`, maximale startsnelheid en versnelling meten, regelversterkingen `kp_ldr`/`kp_gyro` afstemmen. Daarna beslissen of `stepper.py` vervalt.
 - [ ] **Odometriekalibratie** — afstandsschaal (`WHEEL_CIRC`) en rotatieschaal (`TRACK_WIDTH`) opnemen in de kalibratiesessie. Zonder deze stuurt de kar structureel scheef.
 - [ ] Rijden-naar-licht: de segmentgewijze aanpak is **vervangen** door de doorlopende kruisfase met bijsturing per slice in `stepper_ramp.py`, plus positioneren op de **bundelas** via de genormaliseerde helderheid `Q`. Zie de sectie *Rijden naar de lichtbron*.
-- [ ] **`LDR_R_FIXED_OHM` naar 1000** in `lib/LDR/ldr_scan_isr.py` — R29/R30 zijn naar 1 kΩ gebracht. Blijft de code op 10000, dan is elke weerstandswaarde stil een factor 10 fout. Zet tegelijk `LDR_R_MIN_OHM` naar ~10, want 60 klemt de schaal dichtbij de bron vast op 100 %.
+- [x] `LDR_R_FIXED_OHM` naar 1000 en `LDR_R_MIN_OHM` naar 20 in `lib/LDR/ldr_scan_isr.py`, passend bij de nieuwe 1 kΩ pull-ups. Delertopologie gedocumenteerd in de code.
+- [x] `WHEEL_BASE_CM` in `ldr_scan_isr.py` gecorrigeerd van 18,5 naar 13,6 cm — een 370°-scan draaide in werkelijkheid 503°.
+- [ ] **`LDR_GAIN_B` opnieuw kalibreren** na het verwisselen van R29/R30: die factor compenseerde ook de tolerantie van het oude 10 kΩ-paar.
+- [ ] **Delertopologie eenmalig verifiëren op hardware:** schijn licht op LDR A en lees de ruwe ADC. Gaat die naar nul, dan is `_adc_to_res_ohm()` juist; gaat die naar 65535, dan loopt de hele schaal omgekeerd en moet de formule `R_FIXED × (65535 − adc)/adc` worden.
+- [ ] **370°-scan opnieuw controleren** met de gecorrigeerde `WHEEL_BASE_CM`. Waren eerdere scans empirisch afgestemd op 18,5, dan wijken piekposities nu af.
 - [ ] **`γ` en `w` meten** met `tests/test_ldr_beam.py` (`gamma()` en `bundel()`). Beide constanten zitten in élke `y`-berekening; de huidige `w ≈ 33°` komt uit één meetpunt met een aangenomen `γ = 0,7`.
 - [ ] **Spleet lichtbron halveren — vereist voor voorwerpen breder dan 4 cm.** De grijper verdraagt maar ±(9 − breedte)/2 cm laterale afwijking, en de huidige bundel haalt ≈ ±2 cm. Zet de spleet **verticaal** (smal horizontaal). Eerst `bundel()` draaien, dan aanpassen, dan controleren of de 370°-scan de bron nog vindt vanaf de werkelijke startpositie.
 - [x] Laterale tolerantie van de grijper vastgesteld: **±(9 − objectbreedte)/2 cm**. Zie *Grijpergeometrie en eindpositionering*.
