@@ -78,6 +78,14 @@ def ramp_stepper():
 delay = round(F_PIO / stapfrequentie) − 5
 ```
 
+Let op: dat is de overhead *binnen* een segment. Bij elke **segmentovergang** komen daar de vier instructies 0–3 (`pull`/`out`/`out`/`mov`) bij, en die zitten niet in de formule. De effectieve overhead is dus:
+
+```
+5 + 4/repeat   cycles per stap
+```
+
+Bij de 256 rampsegmenten (~22 stappen elk) is dat 0,18 cycle op ~1000, ofwel 0,02 %. Bij segmenten van 1 stap loopt het op tot 0,4 %. Verwaarloosbaar voor de gebruikte profielen, maar meet het na op zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen — de waarde is **berekend, nog niet gemeten**.
+
 Bij `F_PIO = 15 MHz` en de topsnelheid van 12800 stappen/s is dat delay = 1167 cycles. De overhead is dan 5 van 1172 = **0,43 %**, tegen ~2,3 % bij de oude 3 MHz. `F_PIO = 15 MHz` is bovendien 150 MHz sysclk / 10 en dus een **integer klokdeler**, zonder jitter van de fractionele deler.
 
 Het programma is 7 instructies. De teller-SM is er 3, dus PIO0 gebruikt 10 van de 32 instructieplaatsen.
@@ -110,7 +118,14 @@ return 0xFFFFFFFF - self.cnt.get()
 Twee dingen om te weten:
 
 - **De teller kent de DIR-pin niet.** Hij telt flanken. Bij een rotatie op de plaats lopen beide tellers positief op terwijl de wielen tegengesteld draaien. Zie §8.
-- **De teller telt commando's, geen beweging.** Bij wielslip loopt hij door. Voor werkelijke beweging is de GY9250 nodig.
+- **De teller telt commando's, geen beweging.** Bij wielslip loopt hij door. De GY9250 ziet daar alleen de **rotatie**-component van; werkelijke *lineaire* verplaatsing kan een IMU niet leveren, want dubbele integratie van de acceleratiemeter drift te snel. Wat welke bron wel geeft:
+
+  | Bron | Wat je eruit krijgt |
+  |---|---|
+  | PIO-teller | gecommandeerde wielstappen |
+  | gyro-Z | werkelijke draaisnelheid en relatieve rotatie op korte termijn |
+  | magnetometer | absolute oriëntatie, mits niet magnetisch verstoord |
+  | werkelijke lineaire positie | vraagt een **externe** referentie: wielencoder, optische flow, baken of kaartwaarneming |
 
 ---
 
@@ -132,7 +147,18 @@ Drie details:
 - **`write=self.sm`** mag direct: een `StateMachine` ondersteunt het buffer-protocol, dus geen `mem32`-adresgehannes.
 - **De buffer moet blijven leven** zolang de transfer loopt; daarom `self._buf = array('I', words)`.
 
-`start_table()` weigert een lege lijst, want een transfer met `count = 0` is firmware-afhankelijk gedrag. Loopt er nog een transfer, dan wordt die **afgekapt** in plaats van erop te wachten — wachten zou seconden kunnen blokkeren, en de aanroeper heeft expliciet besloten iets nieuws te starten.
+`start_table()` weigert een lege lijst, want een transfer met `count = 0` is firmware-afhankelijk gedrag.
+
+**Toevoegen en vervangen zijn twee verschillende operaties**, en dat onderscheid is er niet voor de vorm:
+
+| | Wanneer | Wat het doet |
+|---|---|---|
+| `start_table(words, n)` | de DMA is stil | hangt de tabel achter wat er nog in de FIFO staat; **weigert** (`False`) zolang de DMA schrijft |
+| `replace_table(words, n)` | een beweging loopt nog | `_clear()` eerst: DMA stil, FIFO gewist, signed odometrie bijgewerkt, `committed` terug op de werkelijke pulsstand — dán pas de nieuwe tabel |
+
+Eerder kapte `start_table()` een lopende transfer zelf af. Dat oogde handig, maar `committed` was op dat moment al met de **hele** tabel verhoogd, terwijl de afgekapte DMA lang niet alles naar de FIFO had geschreven. `busy()` wachtte daarna eeuwig op pulsen die nooit kwamen — precies wat er gebeurde bij `Move.finish()` tijdens de opramp. Bovendien bleef de oude FIFO-inhoud staan, zodat oude en nieuwe profielwoorden achter elkaar uitkwamen.
+
+Elk bewegingscommando (`mov`, `s1`, `s2`, `rotate`, `Move`) begint daarom met `halt()` op de betrokken motoren: richting omzetten, tellers resetten en een nieuw profiel starten gebeurt altijd vanuit stilstand.
 
 ---
 
@@ -159,7 +185,7 @@ snelheid
 |---|---|---|---|
 | Ramp op | DMA, 256 woorden | **0** | segmenten van ~2 ms zijn te snel voor MicroPython; DMA is immuun voor GC-pauzes |
 | Brug | onderdeel van dezelfde DMA-transfer | **0** | zie §7 |
-| Kruisfase **zonder** bijsturing | zelfde DMA-transfer, 1 woord | **0** | hele beweging in één transfer, één IRQ aan het eind |
+| Kruisfase **zonder** bijsturing | zelfde DMA-transfer, 1 woord | **0** | hele beweging in één transfer |
 | Kruisfase **met** bijsturing | CPU, 1 woord per 20 ms per motor | ~0,1 % | hier zit de regelkring |
 | Ramp af | DMA, 256 woorden | **0** | |
 
@@ -237,12 +263,12 @@ In de kruisfase ligt dat totaal níet vast. Daar integreert een snelheidsverschi
 Per slice met duur `t`:
 
 ```python
-omega = TURN_SIGN * self.correction()                 # graden/s, + = rechts
-delta = int(omega * STEPS_PER_DEG * t / 2.0 + 0.5)    # stappen verschil per wiel
+omega = self.correction()                             # graden/s, + = rechts
+delta = int(omega * STEPS_PER_DEG * t / 2.0 + 0.5)    # extra stappen LINKER wiel
 delta = klem(delta, ±base * MAX_DIFF_FRAC)            # max ±20 %
 
-ra = base + delta
-rb = base - delta
+ra = base - MOTOR_TURN_SIGN * delta                   # A = rechter wiel bij +1
+rb = base + MOTOR_TURN_SIGN * delta
 
 cyc = F_PIO * base / self.r1                          # PIO-cycles voor deze slice
 MA.push(ra, _clamp_delay(int(cyc / ra + 0.5) - CYCLES_FIXED))
@@ -251,7 +277,9 @@ MB.push(rb, _clamp_delay(int(cyc / rb + 0.5) - CYCLES_FIXED))
 
 Twee dingen zijn hier bewust zo:
 
-1. **De slice heeft een vaste DUUR, niet een vast stappenaantal.** Beide motoren krijgen dezelfde `cyc`, maar een verschillend aantal stappen en dus een verschillende delay. Zo blijven ze in de tijd synchroon; gemeten afwijking is < 20 µs op 20 ms. Bij een vast stappenaantal zouden ze uit de pas lopen.
+1. **De slice heeft een vaste DUUR, niet een vast stappenaantal.** Beide motoren krijgen dezelfde `cyc`, maar een verschillend aantal stappen en dus een verschillende delay. Zo blijven ze in de tijd synchroon; de afrondingsfout van `int(cyc/ra + 0.5)` is **berekend** op < 20 µs op 20 ms (nog niet met een logic analyzer nagemeten). Bij een vast stappenaantal zouden ze uit de pas lopen.
+
+   Dat geldt voor slices die eenmaal in de FIFO staan, **niet voor de start**. De twee DMA's worden na elkaar geconfigureerd en de SM's zijn al actief, dus motor A kan beginnen terwijl voor motor B nog een array wordt aangemaakt. De skew is orde 1 ms, en de start gebeurt op `V_START_CM_S` = 1,91 cm/s, dus dat is ~0,002 cm padverschil ≈ 0,008° koersfout — verwaarloosbaar, maar het is een geschatte waarde. Wie het exact wil: meet de skew met een logic analyzer, of prepareer beide FIFO's met gestopte SM's en start ze samen.
 2. **`ra + rb = 2 × base` exact.** Het midden van de kar schuift dus precies `base` stappen op, hoe groot het stuurverschil ook is.
 
 Met `STEPS_PER_DEG ≈ 159` en `base = 256` stappen per 20 ms:
@@ -260,6 +288,8 @@ Met `STEPS_PER_DEG ≈ 159` en `base = 256` stappen per 20 ms:
 |---|---|---|---|
 | ±5 % | 25 | 0,16° | 8 °/s |
 | ±20 % (maximum) | 102 | 0,64° | 32 °/s |
+
+Die 32 °/s geldt **bij topsnelheid**. Het stuurgezag is een fractie van de rijsnelheid, dus het schaalt evenredig mee: bij 5 cm/s is het nog maar 8,4 °/s. `turn_authority_deg_s(rate)` rekent dat uit en `Move()` zet er het plafond van de `HeadingController` mee — anders commandeert de regelaar bij lage snelheid een draaisnelheid die de wielen niet kunnen leveren, en leest dat verschil daarna als een storing.
 
 Resolutie: 1 stap verschil = **0,0063°**.
 
@@ -288,7 +318,7 @@ if base < 1:
     self._state = self._RAMP_DOWN
 ```
 
-Daarmee is de eindafstand **exact**, onafhankelijk van wanneer de regellus toevallig aanroept. Geen poll-onzekerheid. De laatste slice wordt precies op maat gemaakt.
+Daarmee is het **gecommandeerde gemiddelde stappentotaal exact**, onafhankelijk van wanneer de regellus toevallig aanroept. Geen poll-onzekerheid; de laatste slice wordt precies op maat gemaakt. De *fysieke* afstand is dat niet: microstepping-nauwkeurigheid, wielslip, bandvervorming en de kalibratie van `WHEEL_CIRC` komen daar allemaal nog overheen. `CM_PER_STEP` is een nominale resolutie van 14,9 µm, geen nauwkeurigheid.
 
 ### Signed odometrie
 
@@ -326,6 +356,17 @@ De FIFO wissen gebeurt met `sm.init(...)`: MicroPython heeft daar geen aparte AP
 
 `brake()` schat de huidige snelheid uit de voortgang door het profiel (`current_rate()`), want afremmen vanaf een te hoog veronderstelde snelheid zou eerst een snelheidssprong omhoog geven — en dus synchronismeverlies.
 
+### `finish()` tijdens de opramp
+
+Valt `finish()` in de kruisfase, dan is het simpel: de CPU stopt met pushen en de afremramp gaat via DMA achter de resterende slices aan.
+
+Valt hij tijdens de **opramp**, dan kan dat niet, om twee redenen tegelijk:
+
+- `committed` is bij de start al met de héle opramp plus het brugsegment verhoogd, maar de DMA heeft nog lang niet alles naar de FIFO geschreven. Kap je de transfer zomaar af, dan wacht `busy()` op pulsen die niet meer komen;
+- de gewone afremtabel begint op `r1`, terwijl de motor nog ergens tussen `r0` en `r1` zit. Dat zou eerst een sprong **omhoog** geven — precies waar de ramp voor bedoeld is.
+
+`_brake_from_ramp_up()` doet het daarom in deze volgorde: eerst `current_rate()` lezen, dan `halt()` op beide motoren (DMA stil, FIFO gewist, `committed` terug op de werkelijke pulsstand), en pas daarna een verse afremramp vanaf díe snelheid. De schatting loopt iets achter op de werkelijkheid, en dat is de veilige kant op: een kleine daling in plaats van een sprong omhoog.
+
 ### Op tijd beginnen met afremmen
 
 `finish()` stopt niet onmiddellijk. De afremramp en de al weggeschreven slices liggen vast:
@@ -337,7 +378,7 @@ De FIFO wissen gebeurt met `sm.init(...)`: MicroPython heeft daar geen aparte AP
 | 5 cm/s | 0,19 cm | 0,30 cm | **0,49 cm** | 0,25 cm |
 
 ```python
-doel = sr.stop_dist_cm(6.0) + sr.stopping_distance_cm(snelheid)
+doel = approach.brake_target_cm(snelheid, object_w_cm=6.0)
 if ultrasoon.read_cm() <= doel:
     mv.finish()
 ```
@@ -354,12 +395,14 @@ Tijdens het rijden staan de servo's in rustpositie, dus de kaken liggen achter d
 | **`finetune()`: stilstaand nameten + `creep()`** | **≈ 0,3 cm** |
 
 ```python
-sr.finetune(ultrasoon.read_cm, object_w_cm=5.0)
+import sys; sys.path.append("/lib/gripper")
+import approach
+approach.finetune(ultrasoon.read_cm, object_w_cm=5.0)
 ```
 
 Zodra de arm uitklapt staan de kaken (9 cm open) in een bundel die op 12–15 cm ongeveer 8 cm breed is — de sensor kijkt dan naar de eigen vingers. **`finetune()` is dus het laatste correctiemoment**; alles daarna is open-loop, op de grijperstroomsensor na.
 
-`_mean_dist()` wacht 60 ms tussen metingen, want `ultrasoon.INTERVAL_MS` is 50 ms: lees je sneller, dan krijg je dezelfde gebufferde waarde terug en doet het gemiddelde niets.
+`mean_dist_cm()` wacht 60 ms tussen metingen, want `ultrasoon.INTERVAL_MS` is 50 ms: lees je sneller, dan krijg je dezelfde gebufferde waarde terug en doet het gemiddelde niets.
 
 ### Grijpergeometrie
 
@@ -372,6 +415,8 @@ De kaken sluiten horizontaal, maar de toppen bewegen naar voren: `tip_pos_cm(o) 
 | 7 cm | 12,9 cm | 0,9 cm breed | ± 1,0 cm |
 
 Een *smaller* voorwerp vraagt een *grotere* stopafstand: smaller betekent verder sluiten, dus meer vooruitgang van de toppen. De volledige tabel en de onderbouwing staan in [globale_specificatie.md](globale_specificatie.md) onder *Grijpergeometrie en eindpositionering*.
+
+Deze geometrie stond eerst in `stepper_ramp.py`, maar hoort niet in een motordriver: die kende zo de afmetingen van één grijper en de stopstrategie van één missie. Nu in [`lib/gripper/geometry.py`](lib/gripper/geometry.py) (puur rekenwerk, geen imports) en [`lib/gripper/approach.py`](lib/gripper/approach.py) (`finetune()`, `mean_dist_cm()`, `brake_target_cm()`). De stepper levert alleen nog `creep`, `drive`, `brake`, `halt` en `busy`.
 
 ---
 
@@ -409,23 +454,26 @@ while sr.busy():
 ```python
 import stepper_ramp as sr, ultrasoon, time
 from stepper_ramp import HeadingController, gyro_z_deg_s
+sys.path.append("/lib/gripper"); import approach
 
 hc = HeadingController(ldr_diff=mijn_ldr_verschil,
                        gyro_rate=gyro_z_deg_s(sensor))
 
-mv = sr.drive(200, 19.1, correction=hc.output)
-doel = sr.STOP_DIST_CM + sr.stopping_distance_cm(19.1)
+mv = sr.drive(200, 19.1, correction=hc)      # de controller zelf, niet hc.output
+doel = approach.brake_target_cm(19.1)
 while mv.service():
     if ultrasoon.read_cm() <= doel:
         mv.finish()
     time.sleep_ms(10)
 ```
 
-**Alleen koers vasthouden op de gyro:**
+**Alleen de draaisnelheid dempen met de gyro:**
 
 ```python
-mv = sr.drive(50, 19.1, correction=sr.hold_heading(gyro_z_deg_s(sensor)))
+mv = sr.drive(50, 19.1, correction=sr.damp_yaw_rate(gyro_z_deg_s(sensor)))
 ```
+
+Dit heette `hold_heading()`, maar dat beloofde te veel: het setpoint is hier altijd nul, dus de uitgang is `−kp_gyro × gemeten`. Een externe verdraaiing wordt tegengewerkt *zolang die plaatsvindt*, maar de hoekfout die overblijft wordt daarna niet teruggedraaid, en gyrobias geeft blijvende drift. **Echt** koershouden vraagt integratie van gyro-Z tot een hoek en het wegregelen van díe fout; dat zit er nu niet in.
 
 `gyro_z_deg_s()` is **verplicht** rond de GY9250: [`mpu6500.py`](lib/GY9250/mpu6500.py) heeft `gyro_sf=SF_RAD_S` als default en levert dus **radialen/s**, terwijl de regelaar in graden/s rekent. Rechtstreeks `sensor.gyro[2]` doorgeven maakt de correctie 57,3× te klein.
 
@@ -433,7 +481,7 @@ mv = sr.drive(50, 19.1, correction=sr.hold_heading(gyro_z_deg_s(sensor)))
 
 ## 13. Tests en verificatie
 
-[`tests/test_stepper_ramp_math.py`](tests/test_stepper_ramp_math.py) — **158 pure-Python tests, geen hardware nodig** (`machine` en `rp2` worden gestubd, draait op de PC met CPython):
+[`tests/test_stepper_ramp_math.py`](tests/test_stepper_ramp_math.py) — **226 pure-Python tests, geen hardware nodig** (`machine` en `rp2` worden gestubd, draait op de PC met CPython):
 
 ```
 python3 tests/test_stepper_ramp_math.py
@@ -441,12 +489,22 @@ python3 tests/test_stepper_ramp_math.py
 
 Gedekt: exact stappentotaal over het hele bereik (0 t/m 200 000 stappen), monotone snelheid in beide ramprichtingen, veldgrenzen, driehoeksprofiel, nulafstanden, invoervalidatie, slice-rekenkunde, signed odometrie bij rotatie en achteruit, `Move.finish()`, en de DMA → CPU overgang.
 
+Daarnaast als regressie, omdat elk van deze drie eerder fout was:
+
+- **`finish()` tijdens de opramp-DMA** (direct na constructie, halverwege, en vlak voor het DMA-einde). `committed` was bij de start al met de hele opramp verhoogd, terwijl de afgekapte transfer die stappen nooit uitstuurde — `busy()` bleef daardoor eeuwig `True`.
+- **Een nieuw commando tijdens een lopende beweging.** `Move()` zette DIR en de tellers om zónder eerst te stoppen, zodat oude FIFO-woorden met de nieuwe richting konden uitkomen.
+- **De tekenconventie.** `rotate_deg(+90)` gaf `heading() = −90`: de draairichting stond tegengesteld aan zowel de odometrie als de bijsturing. De test controleert nu beide waarden van `MOTOR_TURN_SIGN`.
+
+[`tests/test_gripper_geometry.py`](tests/test_gripper_geometry.py) — 32 tests voor de grijpergeometrie, eveneens zonder hardware.
+
 ### Nog te verifiëren op hardware
 
 | Wat | Hoe |
 |---|---|
-| `TURN_SIGN` (+1 / −1) | opgeheven wielen: een handmatige draai naar rechts moet zowel een positieve gemeten (gyro) als een positieve gewenste draaisnelheid geven |
-| `CYCLES_FIXED = 5` | `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`. Controleer ook met een logic analyzer: die ziet de pulsbreedte (verwacht 200 ns) en of er stappen wegvallen |
+| `MOTOR_TURN_SIGN` (+1 / −1) | `rotate_deg(+90)` moet de kar naar **rechts** draaien; `heading()` moet daarna ≈ +90 geven |
+| `GYRO_Z_SIGN` (+1 / −1) | opgeheven wielen: draai de kar met de hand naar rechts, `gyro_z_deg_s(sensor)()` moet **positief** zijn |
+| `LDR_DIFF_SIGN` (+1 / −1) | houd een lamp rechts van de kar; `ldr_diff()` moet **positief** zijn |
+| `CYCLES_FIXED = 5` (+ 4/segment) | `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`. Meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, zodat de per-segment overhead zichtbaar wordt. Controleer met een logic analyzer ook de pulsbreedte (verwacht 200 ns) en of er stappen wegvallen |
 | Startsnelheid en max. versnelling | met de GY9250 als onafhankelijke referentie — de PIO-teller kan een stall niet zien |
 | `kp_ldr`, `kp_gyro` | de standaard `kp_ldr = 25` geeft bij een vol LDR-verschil 25 °/s, net onder het plafond van 32,2 °/s, dus de regelaar verzadigt normaal niet |
 | Odometriekalibratie | 1,00 m rijden (`WHEEL_CIRC`) en 360° draaien (`TRACK_WIDTH`) |

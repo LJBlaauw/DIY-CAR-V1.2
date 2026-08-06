@@ -5,6 +5,16 @@
 # LET OP — dit is een VERVANGER van stepper.py, geen aanvulling.
 # Beide claimen PIO0 SM0..SM3 en dezelfde GPIO's. Importeer er altijd maar één.
 #
+# Het is GEEN drop-in replacement. De namen mov/s1/s2/rotate/stop/enable/
+# disable/status/distance/pio_pos1/pio_pos2/reset_PIO_distance bestaan nog met
+# dezelfde betekenis, maar:
+#   - er zijn geen globale sm0..sm3 meer (code die op sm0.active() wacht breekt;
+#     de generator-SM's blijven hier permanent actief en stallen op een lege FIFO);
+#   - distance() print niets en geeft één signed middenafstand in plaats van twee
+#     motorafstanden;
+#   - de bewegingsfuncties geven True/False in plaats van None;
+#   - stoppen en "klaar" hebben andere semantiek (zie halt/brake/busy).
+#
 # WERKINGSPRINCIPE
 # ----------------
 # De stapgenerator in de PIO leest 32-bit woorden uit zijn TX-FIFO. Elk woord
@@ -65,6 +75,29 @@
 # richtingswisseling het teken meeneemt. `pulses()` blijft de monotone teller en
 # wordt gebruikt voor `busy()`, waar juist ongesigneerd geteld moet worden.
 #
+# WAT DE ODOMETER WEL EN NIET IS
+# ------------------------------
+# De teller telt GECOMMANDEERDE wielstappen. Het gecommandeerde gemiddelde
+# stappentotaal is exact; de fysieke afstand niet, want microstepping, slip,
+# bandvervorming en de kalibratie van WHEEL_CIRC blijven eroverheen komen.
+# CM_PER_STEP is een nominale RESOLUTIE van 14,9 um, geen nauwkeurigheid.
+#
+#   pulsteller  -> gecommandeerde wielstappen
+#   gyro-Z      -> werkelijke draaisnelheid en relatieve rotatie op korte termijn
+#   magnetometer-> absolute orientatie, mits niet magnetisch verstoord
+#   werkelijke lineaire positie -> vraagt een EXTERNE referentie (wielencoder,
+#                  optische flow, baken, kaartwaarneming). Dubbele integratie van
+#                  de acceleratiemeter drift daar te snel voor.
+#
+# TRANSACTIES
+# -----------
+# Een lopende beweging vervangen en een profiel ACHTER een bestaande FIFO
+# hangen zijn twee verschillende operaties, en ze door elkaar halen levert
+# stilstaande karren op:
+#   start_table()   hangt er iets achter en WEIGERT zolang de DMA nog schrijft;
+#   replace_table() wist eerst DMA en FIFO en hersynchroniseert `committed`.
+# Elk nieuw commando (mov, Move, ...) begint daarom met halt() op beide motoren.
+#
 # KOERSCORRECTIE
 # --------------
 # Koersverandering komt van een VERSCHIL IN STAPPENAANTAL tussen de wielen, niet
@@ -119,9 +152,20 @@ def step_counter():
 # Constanten
 # ----------------------------------------------------------------
 F_PIO         = 15_000_000   # 150 MHz sysclk / 10 -> integer klokdeler, geen fractionele jitter
-CYCLES_FIXED  = 5            # vaste cycles per stap in ramp_stepper (mov[2]=3, jmp_y=1, +1)
-                             # TE VERIFIEREN met een logic analyzer: meet de werkelijke
-                             # STEP-frequentie tegen _delay_for() (zie meet_frequentie()).
+CYCLES_FIXED  = 5            # vaste cycles PER STAP binnen een segment:
+                             #   mov(x, isr)[2]      = 3
+                             #   jmp(x_dec, "wait")  = delay + 1  (bij x == 0 wordt de
+                             #                         instructie nog één keer uitgevoerd
+                             #                         zonder te springen)
+                             #   jmp(y_dec, "pulse") = 1
+                             #   -> stapperiode = delay + 5 cycles
+                             # NIET meegerekend: 4 cycles PER SEGMENT voor pull/out/out/mov.
+                             # De effectieve overhead is dus 5 + 4/repeat. Bij de 256
+                             # rampsegmenten (~22 stappen) is dat 0,18 cycle op ~1000
+                             # (0,02%); bij segmenten van 1 stap 0,4%.
+                             # BEREKEND, nog niet gemeten. TE VERIFIEREN met een logic
+                             # analyzer op zowel lange segmenten als segmenten van
+                             # 1, 2, 8 en 256 stappen (zie meet_frequentie()).
 
 WHEEL_CIRC    = 19.1         # cm — gemeten wielomtrek
 TRACK_WIDTH   = 13.6         # cm — spoorbreedte hart-op-hart
@@ -149,15 +193,29 @@ FIFO_DEPTH    = 4            # TX-FIFO diepte zonder fifo_join
 BRIDGE_SLICES = 2            # brugsegment aan het eind van de opramp (zie kop)
 MAX_DIFF_FRAC = 0.20         # maximale snelheidsdifferentie per wiel (+/- 20%)
 
-# Afgeleid: maximaal stuurgezag in graden/s
-MAX_TURN_DEG_S = (2 * MAX_DIFF_FRAC * V_MAX_CM_S / CM_PER_STEP) / STEPS_PER_DEG
 
-# Tekenconventie voor bijsturen, heading() en de gyro. Positief = NAAR RECHTS.
-# Welke fysieke motor links of rechts zit volgt niet uit de code — dat is montage.
-# Stuurt de kar de verkeerde kant op, zet deze op -1. Dat is de enige plek.
-# Verifieren met opgeheven wielen: een handmatige draai naar rechts moet zowel
-# een positieve gemeten als een positieve gewenste draaisnelheid geven.
-TURN_SIGN     = +1
+# ----------------------------------------------------------------
+# Tekenconventies — PUBLIEK GELDT ALTIJD: POSITIEF = NAAR RECHTS
+# ----------------------------------------------------------------
+# Drie ONAFHANKELIJKE hardwaregrenzen, elk met een eigen teken. Ze corrigeren
+# verschillende fouten en horen daarom niet in één constante: een omgekeerd
+# gemonteerde GY9250 vraagt een ander gyroteken zonder dat er iets mankeert aan
+# de motorbekabeling of aan rotate_deg(). Zet de tekens ALLEEN hier, aan de
+# hardwaregrens; de rest van de code rekent in de publieke conventie.
+#
+# MOTOR_TURN_SIGN  +1 = motor A is het RECHTER wiel, motor B het linker.
+#                  Raakt rotate(), rotate_deg(), heading(), status() en de
+#                  bijsturing in Move.
+#                  Verifieren: rotate_deg(+90) moet de kar naar RECHTS draaien
+#                  en heading() moet daarna ongeveer +90 geven.
+# GYRO_Z_SIGN      +1 = gyro-Z is positief bij een draai naar rechts.
+#                  Verifieren met opgeheven wielen: draai de kar met de hand
+#                  naar rechts, gyro_z_deg_s(sensor)() moet positief zijn.
+# LDR_DIFF_SIGN    +1 = een positief LDR-verschil betekent dat de bron RECHTS
+#                  ligt. Verifieren: houd een lamp rechts, ldr_diff() > 0.
+MOTOR_TURN_SIGN = +1
+GYRO_Z_SIGN     = +1
+LDR_DIFF_SIGN   = +1
 
 
 # ----------------------------------------------------------------
@@ -176,6 +234,28 @@ def rate_of(cm_s):
     return abs(cm_s) / CM_PER_STEP
 
 
+def turn_authority_deg_s(rate):
+    """Maximale draaisnelheid (graden/s) bij een kruissnelheid van `rate` stappen/s.
+
+    Het stuurgezag is een FRACTIE van de rijsnelheid (MAX_DIFF_FRAC), dus het
+    schaalt mee: bij halve snelheid is er half zoveel gezag. Altijd aftoppen op
+    de waarde bij V_MAX zou de regelaar bij lage snelheid een setpoint laten
+    commanderen dat de wielen niet kunnen leveren — en dat verschil zou daarna
+    ten onrechte als koersvolgfout worden gemeld.
+    """
+    return 2.0 * MAX_DIFF_FRAC * rate / STEPS_PER_DEG
+
+
+# Maximaal stuurgezag, bij topsnelheid. Bij lagere snelheid is het evenredig
+# minder; gebruik dan turn_authority_deg_s(rate).
+MAX_TURN_DEG_S = turn_authority_deg_s(rate_of(V_MAX_CM_S))
+
+
+def _is_number(value):
+    """True voor een echt getal. bool telt niet mee: True als afstand is onzin."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _check_dir(value, valid, name):
     """Weiger een ongeldige richting in plaats van hem stil als 'anders' te lezen."""
     if not isinstance(value, str) or value.lower() not in valid:
@@ -184,9 +264,29 @@ def _check_dir(value, valid, name):
 
 
 def _check_pos(value, name):
-    """Weiger nul, negatief en niet-eindige getallen."""
-    if not (value > 0) or value != value or value - value != 0:
+    """Weiger nul, negatief, niet-eindig en niet-numeriek.
+
+    De typecontrole staat vooraan: zonder die controle zou een string een
+    TypeError geven in plaats van de beloofde ValueError.
+    """
+    if not _is_number(value) or not (value > 0) or value - value != 0:
         raise ValueError("%s moet een positief eindig getal zijn, kreeg %r" % (name, value))
+    return value
+
+
+def _check_dist(value, name="dist"):
+    """Afstanden zijn ONGETEKEND: de richting staat in een aparte parameter.
+
+    cm_to_steps() neemt de absolute waarde, dus zonder deze controle zou
+    mov('f', 10, -5) stil 5 cm VOORUIT rijden terwijl de aanroeper duidelijk
+    iets anders bedoelde. Nul is toegestaan en levert een no-op.
+
+    creep() is de uitzondering: die neemt bewust een SIGNED afstand, omdat het
+    teken daar de correctierichting is.
+    """
+    if not _is_number(value) or value < 0 or value - value != 0:
+        raise ValueError("%s moet 0 of een positief eindig getal zijn, kreeg %r"
+                         % (name, value))
     return value
 
 
@@ -292,8 +392,10 @@ def plan(n_total, v_cruise_cm_s, v_start_cm_s=V_START_CM_S, accel=ACCEL_CM_S2):
 def profile_words(n_total, v_cruise_cm_s, v_start_cm_s=V_START_CM_S, accel=ACCEL_CM_S2):
     """Compleet profiel (op + kruis + af) als één woordenlijst, exact n_total stappen.
 
-    Dit is de nul-CPU variant: de hele beweging in één DMA-transfer, één IRQ aan
-    het eind. Gedrag identiek aan het oude fire-and-forget concept, maar mét ramp.
+    Dit is de nul-CPU variant: de hele beweging in één DMA-transfer. Er is GEEN
+    interrupt aan het eind — deze module configureert nergens een DMA- of
+    PIO-IRQ. Tijdens de uitvoering doet de CPU niets; voltooiing wordt gepolld
+    met busy(). Verder identiek aan het oude fire-and-forget concept, maar mét ramp.
     Geeft een lege lijst bij n_total <= 0.
     """
     if n_total <= 0:
@@ -365,7 +467,9 @@ class _Motor:
         """Monotone hardware-pulsteller. Kent geen richting.
 
         LET OP: dit telt COMMANDO'S, geen beweging. Bij wielslip (hobbel, gleuf)
-        loopt deze teller door. Voor werkelijke beweging heb je de GY9250 nodig.
+        loopt deze teller door. De GY9250 ziet daar alleen de ROTATIE-component
+        van; werkelijke lineaire verplaatsing vraagt een externe referentie
+        (zie de kop, "WAT DE ODOMETER WEL EN NIET IS").
         """
         self.cnt.exec("mov(isr, y)")
         self.cnt.exec("push()")
@@ -387,23 +491,37 @@ class _Motor:
         self.committed += repeat
 
     def start_table(self, words, n_steps):
-        """Speel een woordenlijst af via DMA (rampafasen; nul-CPU pad).
+        """Hang een woordenlijst ACHTER wat er al in de FIFO staat, via DMA.
 
-        Doet niets bij een lege lijst: een DMA-transfer met count=0 is
+        Dit is het TOEVOEG-pad (rampafasen; nul-CPU). Het WEIGERT zolang er nog
+        een transfer loopt: dan zou een tweede DMA in dezelfde FIFO schrijven,
+        en zou `committed` pulsen tellen die door het afkappen nooit komen —
+        waarna busy() eeuwig True blijft. Gebruik replace_table() om een lopende
+        beweging te vervangen.
+
+        Doet ook niets bij een lege lijst: een DMA-transfer met count=0 is
         firmware-afhankelijk gedrag en moeten we niet opzoeken.
         """
         if not words or n_steps <= 0:
             return False
-        # Loopt er nog een transfer, dan wordt die afgekapt in plaats van erop te
-        # wachten. Wachten zou hier seconden kunnen blokkeren, en de aanroeper
-        # heeft expliciet besloten een nieuwe tabel te starten.
         if self.dma.active():
-            self.dma.active(0)
+            return False
         self._buf = array('I', words)
         self.dma.config(read=self._buf, write=self.sm,
                         count=len(self._buf), ctrl=self._ctrl, trigger=True)
         self.committed += n_steps
         return True
+
+    def replace_table(self, words, n_steps):
+        """Vervang een lopende beweging door een nieuwe tabel.
+
+        Transactioneel: DMA stil, FIFO leeg, signed odometrie bijgewerkt en
+        `committed` terug op de WERKELIJKE pulsstand — pas daarna de nieuwe
+        tabel. Zonder dat laatste blijven de afgekapte, wel al meegetelde
+        pulsen voor altijd in `committed` staan.
+        """
+        self._clear()
+        return self.start_table(words, n_steps)
 
     def note_plan(self, n_ramp, r0, r1, n_total):
         """Bewaar het profiel zodat current_rate() de snelheid kan schatten."""
@@ -524,47 +642,66 @@ def _launch(dirs, speed, n):
     for m, fwd in dirs:
         m.halt()            # een nieuw commando overschrijft een lopende beweging
         m.set_dir(fwd)
-    enable()
+        m.enable()          # alleen de driver(s) die ook echt gaan draaien; de
+                            # globale enable() zou s1() ook motor B laten trekken
     for m, _ in dirs:
         m.note_plan(n_ramp, r0, r1, n)
         m.start_table(words, n)
     return True
 
 
+def _turn_dirs(right):
+    """(motor, forward)-paren voor een draai op de as. right=True is naar rechts.
+
+    Bij MOTOR_TURN_SIGN = +1 is motor A het rechter wiel; dat loopt bij een
+    draai naar rechts dus ACHTERUIT. Alle draaifuncties gaan hier doorheen,
+    zodat rotate(), rotate_deg() en heading() niet uit elkaar kunnen lopen.
+    """
+    a_forward = (not right) if MOTOR_TURN_SIGN > 0 else right
+    return ((MA, a_forward), (MB, not a_forward))
+
+
 def s1(direction, speed, dist):
-    """Alleen motor A. direction 'f'/'b', speed cm/s, dist cm."""
+    """Alleen motor A. direction 'f'/'b', speed cm/s, dist cm (>= 0)."""
     fwd = _check_dir(direction, ('f', 'b'), "direction") == 'f'
+    _check_dist(dist)
     return _launch(((MA, fwd),), _check_pos(speed, "speed"), cm_to_steps(dist))
 
 
 def s2(direction, speed, dist):
-    """Alleen motor B. direction 'f'/'b', speed cm/s, dist cm."""
+    """Alleen motor B. direction 'f'/'b', speed cm/s, dist cm (>= 0)."""
     fwd = _check_dir(direction, ('f', 'b'), "direction") == 'f'
+    _check_dist(dist)
     return _launch(((MB, fwd),), _check_pos(speed, "speed"), cm_to_steps(dist))
 
 
 def mov(direction, speed, dist):
-    """Beide motoren dezelfde kant, dezelfde afstand."""
+    """Beide motoren dezelfde kant, dezelfde afstand (dist >= 0)."""
     fwd = _check_dir(direction, ('f', 'b'), "direction") == 'f'
+    _check_dist(dist)
     return _launch(((MA, fwd), (MB, fwd)), _check_pos(speed, "speed"), cm_to_steps(dist))
 
 
 def rotate(direction, speed, dist):
-    """Draai op de as. direction 'l'/'r', dist = booglengte per wiel in cm."""
+    """Draai op de as. direction 'l'/'r', dist = booglengte per wiel in cm (>= 0)."""
     right = _check_dir(direction, ('l', 'r'), "direction") == 'r'
-    return _launch(((MA, not right), (MB, right)),
-                   _check_pos(speed, "speed"), cm_to_steps(dist))
+    _check_dist(dist)
+    return _launch(_turn_dirs(right), _check_pos(speed, "speed"), cm_to_steps(dist))
 
 
 def rotate_deg(degrees, speed=V_MAX_CM_S / 2):
-    """Draai op de as over een hoek. Positief = naar rechts (zie TURN_SIGN).
+    """Draai op de as over een hoek. Positief = naar rechts (zie MOTOR_TURN_SIGN).
 
     Per graad legt elk wiel STEPS_PER_DEG/2 stappen af, tegengesteld.
     360 graden = 28632 stappen per wiel = 2,24 wielomwentelingen.
+
+    Na afloop moet heading() ongeveer `degrees` teruggeven — hetzelfde teken.
+    Klopt dat niet, dan staat MOTOR_TURN_SIGN verkeerd.
     """
+    if not _is_number(degrees) or degrees - degrees != 0:
+        raise ValueError("degrees moet een eindig getal zijn, kreeg %r" % (degrees,))
     n = int(abs(degrees) * STEPS_PER_DEG / 2 + 0.5)
-    right = (TURN_SIGN * degrees) >= 0
-    return _launch(((MA, not right), (MB, right)), _check_pos(speed, "speed"), n)
+    return _launch(_turn_dirs(degrees >= 0), _check_pos(speed, "speed"), n)
 
 
 # ----------------------------------------------------------------
@@ -573,64 +710,24 @@ def rotate_deg(degrees, speed=V_MAX_CM_S / 2):
 def creep(dist_cm, speed_cm_s=2.0):
     """Kruipcorrectie: kleine, exacte verplaatsing. Positief = vooruit.
 
+    Dit is de enige bewegingsfunctie met een SIGNED afstand: het teken is hier
+    de correctierichting, niet een vergissing.
+
     Bij 2 cm/s is er praktisch geen ramp nodig (dat ligt al boven de veilige
     startsnelheid van 1,91 cm/s), dus de beweging is meteen exact en zacht.
     Resolutie is 14,9 um; de meting is dus altijd de beperkende factor.
     """
+    if not _is_number(dist_cm) or dist_cm - dist_cm != 0:
+        raise ValueError("dist_cm moet een eindig getal zijn, kreeg %r" % (dist_cm,))
     if abs(dist_cm) < CM_PER_STEP:
         return False
     return mov('f' if dist_cm > 0 else 'b', speed_cm_s, abs(dist_cm))
 
 
-def _mean_dist(read_cm, n=8, wacht_ms=60):
-    """Gemiddelde afstand uit n ONAFHANKELIJKE ultrasoonmetingen.
-
-    wacht_ms moet groter zijn dan ultrasoon.INTERVAL_MS (50 ms), anders lees je
-    dezelfde gebufferde meting meerdere keren en doet het gemiddelde niets.
-    """
-    import time
-    som, tel = 0.0, 0
-    for i in range(n):
-        if i:
-            time.sleep_ms(wacht_ms)
-        d = read_cm()
-        if d and d > 0:
-            som += d
-            tel += 1
-    return (som / tel) if tel else None
-
-
-def finetune(read_cm, object_w_cm=None, tol_cm=0.1, pogingen=3,
-             speed_cm_s=2.0, n_meet=8):
-    """Meet stilstaand na en kruip naar de exacte stopafstand.
-
-    Dit is het LAATSTE correctiemoment. Zodra de arm uitklapt kijkt de ultrasoon
-    naar de eigen vingers en is er geen terugkoppeling meer -- alles daarna is
-    open-loop. Stilstaand meten haalt de rijsnelheid en de meetlatentie uit de
-    fout, waardoor de onzekerheid van ~0,74 cm naar ~0,3 cm zakt.
-
-    `read_cm` is een callable die de ultrasoonafstand in cm geeft (bv.
-    ultrasoon.read_cm), zodat deze module sensor-agnostisch blijft.
-
-    Geeft (gemeten_afstand, doel, gelukt) terug.
-    """
-    doel = stop_dist_cm(object_w_cm)
-    lo, hi = grip_window_cm(object_w_cm)
-    d = None
-    for _ in range(max(1, int(pogingen))):
-        d = _mean_dist(read_cm, n_meet)
-        if d is None:
-            return None, doel, False
-        fout = d - doel
-        if abs(fout) <= tol_cm:
-            break
-        creep(fout, speed_cm_s)
-        while busy():
-            pass
-    gelukt = d is not None and lo <= d <= hi + tol_cm
-    print("finetune: gemeten %.2f cm, doel %.2f cm, venster %.2f-%.2f -> %s"
-          % (d if d else -1, doel, lo, hi, "OK" if gelukt else "BUITEN VENSTER"))
-    return d, doel, gelukt
+# finetune() stond hier, maar hoort niet in een motordriver: die kende dan de
+# grijperafmetingen, de ultrasoonmiddeling en de stopstrategie van één missie.
+# Nu in lib/gripper/approach.py; de geometrie zelf in lib/gripper/geometry.py.
+# Deze module levert alleen nog creep/drive/brake/halt/busy.
 
 
 def halt():
@@ -672,87 +769,6 @@ def busy():
     return MA.busy() or MB.busy()
 
 
-# ----------------------------------------------------------------
-# Grijpergeometrie
-# ----------------------------------------------------------------
-# De kaken sluiten HORIZONTAAL, maar de vingertoppen bewegen daarbij naar VOREN.
-# Gemeten: maximaal open (9 cm) -> toppen 12 cm vóór de ultrasoon;
-#          bijna dicht  (2 cm) -> toppen 15 cm vóór de ultrasoon.
-#
-# LET OP: tip_pos_cm() is een RECHTE door die twee meetpunten. Een
-# vierstangenmechanisme geeft in werkelijkheid een kromme; één extra meting bij
-# ~5 cm opening laat zien hoeveel dat afwijkt.
-#
-# Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan ACHTER
-# de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is dan zuiver.
-# Zodra de arm uitklapt staan de kaken (9 cm open) in een bundel die op 12-15 cm
-# ongeveer 8 cm breed is -> vanaf dat moment kijkt de sensor naar de eigen
-# vingers en is er GEEN terugkoppeling meer.
-GRIP_OPEN_CM  = 9.0      # kaakopening maximaal open
-GRIP_MIN_CM   = 2.0      # kaakopening bijna dicht
-TIP_NEAR_CM   = 12.0     # toppen t.o.v. ultrasoon bij maximaal open
-TIP_FAR_CM    = 15.0     # toppen t.o.v. ultrasoon bij bijna dicht
-OBJECT_W_CM   = 6.0      # aangenomen objectbreedte; per missie te overschrijven
-
-
-def tip_pos_cm(opening_cm):
-    """Afstand van de vingertoppen tot de ultrasoon bij een gegeven kaakopening."""
-    f = (GRIP_OPEN_CM - opening_cm) / (GRIP_OPEN_CM - GRIP_MIN_CM)
-    return TIP_NEAR_CM + f * (TIP_FAR_CM - TIP_NEAR_CM)
-
-
-def stop_dist_cm(object_w_cm=None):
-    """Doelafstand (ultrasoon) voor een voorwerp van deze breedte.
-
-    De kaken raken het voorwerp op het moment dat de opening gelijk is aan de
-    objectbreedte; dan staan de toppen op tip_pos_cm(breedte).
-
-    Contra-intuïtief maar juist: een SMALLER voorwerp vraagt een GROTERE
-    stopafstand. Smaller betekent verder sluiten, dus meer vooruitgang van de
-    toppen, dus moet de kar verder terug blijven staan.
-
-        3 cm -> 14,6 cm      6 cm -> 13,3 cm
-        5 cm -> 13,7 cm      8 cm -> 12,4 cm
-    """
-    return tip_pos_cm(OBJECT_W_CM if object_w_cm is None else object_w_cm)
-
-
-def grip_window_cm(object_w_cm=None):
-    """(min, max) ultrasoonafstand waarbij het voorwerp nog gegrepen wordt.
-
-    Het voorwerp wordt gegrepen zolang de toppen er langs vegen terwijl de
-    opening nog ruimer is dan het voorwerp. De vooruitgang van 3 cm is dus een
-    gratis venster bovenop de stopnauwkeurigheid:
-
-        3 cm breed -> 2,6 cm venster      7 cm breed -> 0,9 cm venster
-        5 cm breed -> 1,7 cm venster      8 cm breed -> 0,4 cm venster
-
-    De ondergrens is conservatief TIP_NEAR_CM. De werkelijke ondergrens ligt
-    lager en wordt bepaald door de KAAKDIEPTE (palm t.o.v. toppen), die nog niet
-    is opgemeten.
-    """
-    return TIP_NEAR_CM, stop_dist_cm(object_w_cm)
-
-
-def lateral_tolerance_cm(object_w_cm=None):
-    """Maximale laterale afwijking waarbij het voorwerp nog tussen de kaken past.
-
-    De kaken vegen tijdens het uitklappen door de ruimte waar het voorwerp
-    staat. Bij een grotere afwijking raakt één kaak het voorwerp en STOOT die
-    het om -- een vervelender faalmodus dan alleen misgrijpen. Klap de arm
-    daarom uit BOVEN het voorwerp en laat hem zakken; dan komen de kaken er
-    van boven om heen in plaats van er horizontaal in.
-
-        3 cm -> +/- 3,0 cm      6 cm -> +/- 1,5 cm
-        5 cm -> +/- 2,0 cm      7 cm -> +/- 1,0 cm
-    """
-    w = OBJECT_W_CM if object_w_cm is None else object_w_cm
-    return 0.5 * (GRIP_OPEN_CM - w)
-
-
-STOP_DIST_CM = tip_pos_cm(OBJECT_W_CM)      # 13,3 cm bij een voorwerp van 6 cm
-
-
 def stopping_distance_cm(speed_cm_s=V_MAX_CM_S, accel=ACCEL_CM_S2):
     """Afstand die de kar nog aflegt nadat je Move.finish() aanroept.
 
@@ -763,7 +779,7 @@ def stopping_distance_cm(speed_cm_s=V_MAX_CM_S, accel=ACCEL_CM_S2):
     Gebruik dit om het afremmen vooruit te plannen; roep je finish() pas aan
     OP de doelafstand, dan schiet je er met deze afstand voorbij:
 
-        doel = STOP_DIST_CM + stopping_distance_cm(snelheid)
+        doel = geometry.STOP_DIST_CM + stopping_distance_cm(snelheid)
         if ultrasoon.read_cm() <= doel:
             mv.finish()
 
@@ -793,6 +809,17 @@ def pio_pos2():
 
 
 def reset_PIO_distance():
+    """Zet beide odometers op nul.
+
+    ALLEEN STILSTAAND AANROEPEN. De hardwareteller wordt hier teruggezet zonder
+    de DMA, de FIFO of `committed` mee te nemen; doe je dit tijdens een
+    beweging, dan telt busy() op een teller die net op nul is gezet en loopt de
+    signed positie mis. Elk bewegingscommando doet zelf al een halt() vooraf,
+    dus in normaal gebruik is dit niet nodig.
+    """
+    if busy():
+        raise RuntimeError("reset_PIO_distance() tijdens een beweging; "
+                           "roep eerst halt() of brake() aan")
     for m in _MOTORS:
         m.reset_pos()
 
@@ -812,8 +839,12 @@ def heading():
     Volgt uit het SIGNED stappenverschil tussen de wielen, dus dit werkt ook bij
     een rotatie op de plaats. Ziet GEEN wielslip; voor de werkelijke koers moet
     je dit fuseren met de GY9250-gyro.
+
+    Bij MOTOR_TURN_SIGN = +1 is A het RECHTER wiel: naar rechts draaien betekent
+    dat B (links) verder loopt, dus B - A > 0. Hetzelfde teken als rotate_deg()
+    en als de correctie in Move.
     """
-    return TURN_SIGN * (MA.travel() - MB.travel()) / STEPS_PER_DEG
+    return MOTOR_TURN_SIGN * (MB.travel() - MA.travel()) / STEPS_PER_DEG
 
 
 def status():
@@ -829,7 +860,7 @@ def status():
               (m.name, "bezig" if p < m.committed else "stil",
                p, t, steps_to_cm(t), m.committed))
     mid = steps_to_cm((snap[0][2] + snap[1][2]) / 2.0)
-    hdg = TURN_SIGN * (snap[0][2] - snap[1][2]) / STEPS_PER_DEG
+    hdg = MOTOR_TURN_SIGN * (snap[1][2] - snap[0][2]) / STEPS_PER_DEG
     print(" Midden: %+.2f cm   koers: %+.2f graden" % (mid, hdg))
     print(" Max stuurgezag: %.1f graden/s" % MAX_TURN_DEG_S)
     print("====================")
@@ -847,17 +878,30 @@ class Move:
 
     De ramps zelf worden NIET bijgestuurd: die duren maar ~3,3 cm en symmetrisch
     houden is eenvoudiger dan de winst waard.
+
+    `correction` is een callable die de gewenste draaisnelheid in graden/s geeft
+    (positief = rechts), of een HeadingController. Geef je de controller zelf,
+    dan wordt zijn stuurgezag op de WERKELIJKE rijsnelheid gezet en krijgt hij
+    terugkoppeling over wat er daadwerkelijk is weggeschreven.
     """
 
     _RAMP_UP, _CRUISE, _RAMP_DOWN, _DONE = 0, 1, 2, 3
 
     def __init__(self, dist_cm, speed_cm_s, correction=None,
                  v_start=V_START_CM_S, accel=ACCEL_CM_S2, forward=True):
-        self.correction = correction         # callable -> gewenste draaisnelheid in graden/s
+        _check_dist(dist_cm, "dist_cm")
+        self._accel = accel
+        self._controller = correction if isinstance(correction, HeadingController) else None
+        # callable -> gewenste draaisnelheid in graden/s
+        self.correction = self._controller.output if self._controller else correction
         self.n_total = cm_to_steps(dist_cm)
         self.n_ramp, self.r0, self.r1 = plan(self.n_total, speed_cm_s, v_start, accel)
         self._centre = 0                     # midden-stappen die al weggeschreven zijn
         self._slice_base = max(1, int(self.r1 * SLICE_MS / 1000.0 + 0.5))
+
+        if self._controller is not None:
+            # Het stuurgezag schaalt met de RIJSNELHEID, niet met V_MAX.
+            self._controller.authority = turn_authority_deg_s(self.r1)
 
         if self.n_total <= 0:
             self._state = self._DONE
@@ -869,10 +913,15 @@ class Move:
         if bridge > n_cruise:
             bridge = n_cruise
 
+        # Eerst een eventueel lopende beweging transactioneel stilzetten. Zonder
+        # deze halt() zou DIR wisselen terwijl er nog oude stappen in de FIFO
+        # staan, zouden de tellers midden in een beweging op nul gaan, en zouden
+        # oude en nieuwe profielwoorden achter elkaar worden uitgevoerd.
         for m in _MOTORS:
+            m.halt()
             m.set_dir(forward)
+            m.enable()
         reset_PIO_distance()
-        enable()
 
         up = ramp_words(self.n_ramp, self.r0, self.r1)
         up.extend(cruise_words(bridge, self.r1))
@@ -892,19 +941,29 @@ class Move:
             return False
 
         # Gewenste draaisnelheid -> stappenverschil over deze slice.
+        # `delta` is het aantal stappen dat het LINKER wiel extra krijgt:
+        # naar rechts draaien betekent dat links verder loopt.
         delta = 0
         if self.correction is not None:
             t = base / self.r1                       # duur van deze slice in s
-            omega = TURN_SIGN * self.correction()    # graden/s, positief = rechts
-            delta = int(omega * STEPS_PER_DEG * t / 2.0 + (0.5 if omega >= 0 else -0.5))
+            omega = self.correction()                # graden/s, positief = rechts
+            d = omega * STEPS_PER_DEG * t / 2.0
+            delta = int(d + (0.5 if d >= 0 else -0.5))
             lim = int(base * MAX_DIFF_FRAC)
             if delta > lim:
                 delta = lim
             elif delta < -lim:
                 delta = -lim
+            if self._controller is not None and t > 0:
+                # Meld terug wat er WERKELIJK is weggeschreven, na afronden en
+                # aftoppen. Zonder deze terugkoppeling zou de koersvolgfout
+                # worden gemeten tegen een setpoint dat de wielen nooit hebben
+                # uitgevoerd, en dat leest als een storing die er niet is.
+                self._controller.note_applied(2.0 * delta / (STEPS_PER_DEG * t))
 
-        ra = base + delta
-        rb = base - delta
+        # Bij MOTOR_TURN_SIGN = +1 is A het rechter wiel en B het linker.
+        ra = base - MOTOR_TURN_SIGN * delta
+        rb = base + MOTOR_TURN_SIGN * delta
         if ra < 1 or rb < 1:
             ra = rb = base
 
@@ -948,9 +1007,42 @@ class Move:
             return False
         return True
 
+    def _brake_from_ramp_up(self):
+        """Afbreken terwijl de opramp-DMA nog schrijft.
+
+        Dit kan NIET met de gewone afremramp erachteraan:
+          - `committed` is bij de start al met de HELE opramp verhoogd, maar de
+            DMA heeft nog lang niet alles naar de FIFO geschreven. Kap je de
+            transfer zomaar af, dan wacht busy() eeuwig op pulsen die niet komen;
+          - de afremtabel begint op r1 terwijl de motor nog ergens tussen r0 en
+            r1 zit, dus dat zou eerst een sprong OMHOOG geven — precies de
+            situatie waar de ramp voor is.
+
+        Daarom: eerst de werkelijke snelheid schatten, dan transactioneel wissen
+        (DMA stil, FIFO leeg, committed terug op de echte pulsstand) en pas
+        daarna een verse afremramp vanaf díe snelheid.
+        """
+        rate = MA.current_rate()
+        if rate is None:
+            rate = self.r1
+        # De schatting loopt iets achter op de werkelijkheid; te laag is de
+        # veilige kant (kleine snelheidsdaling i.p.v. een sprong omhoog).
+        if rate < self.r0:
+            rate = self.r0
+        n = ramp_steps(rate, self.r0, self._accel)
+        down = ramp_words(n, rate, self.r0) if n > 0 else []
+        for m in _MOTORS:
+            m.halt()                        # _clear(): DMA, FIFO en committed
+            if down:
+                m.start_table(down, n)
+        self.n_total = self._centre = MA.committed
+
     def finish(self):
-        """Breek de kruisfase af en rem meteen netjes af."""
-        if self._state in (self._RAMP_UP, self._CRUISE):
+        """Breek de beweging af en rem meteen netjes af."""
+        if self._state == self._RAMP_UP:
+            self._brake_from_ramp_up()
+            self._state = self._DONE
+        elif self._state == self._CRUISE:
             self._state = self._RAMP_DOWN
             self.n_total = self._centre + self.n_ramp
         return self.service()
@@ -961,7 +1053,11 @@ def drive(dist_cm, speed_cm_s=V_MAX_CM_S, correction=None, **kw):
 
     Zonder `correction` is `mov()` beter: dan loopt alles in één DMA-transfer.
 
-        mv = drive(50, 19.1, correction=hc.output)
+    Geef bij voorkeur de HeadingController zelf mee in plaats van `hc.output`:
+    dan zet Move() zijn stuurgezag op de werkelijke rijsnelheid en krijgt hij
+    terugkoppeling over wat er is weggeschreven.
+
+        mv = drive(50, 19.1, correction=hc)
         while mv.service():
             time.sleep_ms(SLICE_MS // 2)
     """
@@ -983,8 +1079,12 @@ async def adrive(dist_cm, speed_cm_s=V_MAX_CM_S, correction=None, **kw):
 # ----------------------------------------------------------------
 # GY9250-koppeling
 # ----------------------------------------------------------------
-def gyro_z_deg_s(sensor):
+def gyro_z_deg_s(sensor, sign=None):
     """Maak van een MPU6500/MPU9250-object een callable die GRADEN/s teruggeeft.
+
+    Past GYRO_Z_SIGN toe, zodat de publieke conventie "positief = rechts" ook
+    geldt als de sensor omgekeerd gemonteerd is. Geef `sign` mee om die
+    constante voor deze ene sensor te overrulen.
 
     De driver in lib/GY9250 heeft `gyro_sf=SF_RAD_S` als default en levert dus
     RADIALEN/s, terwijl HeadingController in graden/s rekent. Rechtstreeks
@@ -996,8 +1096,10 @@ def gyro_z_deg_s(sensor):
 
         hc = HeadingController(ldr_diff=..., gyro_rate=gyro_z_deg_s(sensor))
     """
+    s = GYRO_Z_SIGN if sign is None else sign
+
     def _read():
-        return sensor.gyro[2] * RAD_TO_DEG
+        return s * sensor.gyro[2] * RAD_TO_DEG
     return _read
 
 
@@ -1031,20 +1133,23 @@ class HeadingController:
 
     def __init__(self, ldr_diff=None, gyro_rate=None,
                  kp_ldr=25.0, kp_gyro=0.6, deadband=0.03, outer_div=5,
-                 slip_deg_s=8.0, slip_ticks=10):
+                 track_err_deg_s=8.0, track_err_ticks=10):
         self.ldr_diff = ldr_diff        # callable -> (A-B)/(A+B) na gain-correctie, in [-1, 1]
         self.gyro_rate = gyro_rate      # callable -> gemeten draaisnelheid in GRADEN/s, rechts +
         self.kp_ldr = kp_ldr            # graden/s per eenheid LDR-verschil
         self.kp_gyro = kp_gyro          # versterking van de binnenlus
         self.deadband = deadband        # LDR-verschil waaronder we recht doorrijden
         self.outer_div = max(1, int(outer_div))
-        self.slip_deg_s = slip_deg_s    # drempel voor de slipmelding
-        self.slip_ticks = max(1, int(slip_ticks))
+        # Stuurgezag in graden/s. Move() zet dit op turn_authority_deg_s(r1), dus
+        # op de WERKELIJKE rijsnelheid; de default hoort bij topsnelheid.
+        self.authority = MAX_TURN_DEG_S
+        self.track_err_deg_s = track_err_deg_s   # drempel voor de koersvolgfout
+        self.track_err_ticks = max(1, int(track_err_ticks))
         self._tick = 0
         self._setpoint = 0.0            # gewenste draaisnelheid in graden/s
-        self._last_cmd = 0.0            # wat we vorige tick gecommandeerd hebben
-        self._slip_run = 0
-        self.slipping = False
+        self._last_cmd = 0.0            # wat er vorige tick WERKELIJK is weggeschreven
+        self._err_run = 0
+        self.yaw_tracking_error = False
 
     def output(self):
         """Geef de te commanderen draaisnelheid in graden/s. Positief = rechts.
@@ -1053,7 +1158,7 @@ class HeadingController:
         """
         # --- buitenlus: LDR bepaalt het setpoint --------------------
         if self.ldr_diff is not None and self._tick % self.outer_div == 0:
-            d = self.ldr_diff()
+            d = LDR_DIFF_SIGN * self.ldr_diff()
             if -self.deadband < d < self.deadband:
                 self._setpoint = 0.0
             else:
@@ -1067,32 +1172,58 @@ class HeadingController:
             measured = self.gyro_rate()
             cmd += self.kp_gyro * (self._setpoint - measured)
 
-            # Slipdetectie: blijft de GEMETEN draaisnelheid aanhoudend afwijken
-            # van wat we hebben GECOMMANDEERD, dan slipt er een wiel. Merk op
-            # dat lineaire slip (beide wielen slippen recht vooruit) hiermee
-            # NIET te zien is - dat vraagt een externe positiereferentie.
-            # Alleen "motor actief + weinig versnelling" werkt niet: bij
+            # KOERSVOLGFOUT, geen slipbewijs. Wijkt de GEMETEN draaisnelheid
+            # aanhoudend af van wat er WERKELIJK is weggeschreven (zie
+            # note_applied), dan klopt er iets niet — maar wat, staat hiermee
+            # niet vast: regeldynamiek, gyrovertraging, verzadiging en een
+            # verkeerde gain geven precies hetzelfde beeld als een slippend
+            # wiel. Lineaire slip (beide wielen recht vooruit) is hiermee
+            # sowieso niet te zien; dat vraagt een externe positiereferentie.
+            # Alleen "motor actief + weinig versnelling" werkt ook niet: bij
             # constante snelheid is de voorwaartse versnelling immers nul.
-            if abs(self._last_cmd - measured) > self.slip_deg_s:
-                self._slip_run += 1
+            if abs(self._last_cmd - measured) > self.track_err_deg_s:
+                self._err_run += 1
             else:
-                self._slip_run = 0
-            self.slipping = self._slip_run >= self.slip_ticks
+                self._err_run = 0
+            self.yaw_tracking_error = self._err_run >= self.track_err_ticks
 
-        if cmd > MAX_TURN_DEG_S:
-            cmd = MAX_TURN_DEG_S
-        elif cmd < -MAX_TURN_DEG_S:
-            cmd = -MAX_TURN_DEG_S
+        # Aftoppen op het gezag dat er bij DEZE rijsnelheid werkelijk is.
+        lim = self.authority
+        if cmd > lim:
+            cmd = lim
+        elif cmd < -lim:
+            cmd = -lim
         self._last_cmd = cmd
         return cmd
 
+    def note_applied(self, omega_deg_s):
+        """Vertel de regelaar welke draaisnelheid er WERKELIJK is weggeschreven.
 
-def hold_heading(gyro_rate):
-    """Kortste variant: rij recht en houd de koers vast met alleen de gyro.
+        Move() roept dit elke slice aan, na het afronden en aftoppen van het
+        stappenverschil. Zonder deze terugkoppeling vergelijkt de koersvolgfout
+        de gyro met een setpoint dat de wielen nooit hebben uitgevoerd, en meldt
+        hij bij lage snelheid structureel vals alarm.
+        """
+        self._last_cmd = omega_deg_s
 
-        mv = drive(50, 19.1, correction=hold_heading(gyro_z_deg_s(sensor)))
+
+def damp_yaw_rate(gyro_rate):
+    """Demp de draaisnelheid met alleen de gyro. HOUDT GEEN KOERS VAST.
+
+    Heette hold_heading(), maar dat beloofde te veel. Het setpoint is hier
+    altijd nul, dus de uitgang is simpelweg -kp_gyro * gemeten draaisnelheid:
+    een externe verdraaiing wordt tegengewerkt ZOLANG die plaatsvindt, maar de
+    hoekfout die overblijft wordt daarna niet teruggedraaid. Gyrobias geeft
+    bovendien blijvende koersdrift.
+
+    Echt koershouden vraagt integratie van gyro-Z tot een relatieve hoek en het
+    wegregelen van díe hoekfout — dat zit hier NIET in. Voor langere trajecten
+    heb je daarnaast een absolute referentie nodig (de LDR-buitenlus, of het
+    kompas op stilstand).
+
+        mv = drive(50, 19.1, correction=damp_yaw_rate(gyro_z_deg_s(sensor)))
     """
-    return HeadingController(ldr_diff=None, gyro_rate=gyro_rate).output
+    return HeadingController(ldr_diff=None, gyro_rate=gyro_rate)
 
 
 # ----------------------------------------------------------------
@@ -1117,8 +1248,9 @@ def info():
     print("slice            %d ms = %d stappen, runway %d ms, brug %d ms"
           % (SLICE_MS, int(r1 * SLICE_MS / 1000), SLICE_MS * FIFO_TARGET,
              SLICE_MS * BRIDGE_SLICES))
-    print("stuurgezag       +/- %.1f graden/s, resolutie %.4f graden"
-          % (MAX_TURN_DEG_S, 1.0 / STEPS_PER_DEG))
+    print("stuurgezag       +/- %.1f graden/s bij %.1f cm/s, +/- %.1f bij 5 cm/s"
+          % (MAX_TURN_DEG_S, V_MAX_CM_S, turn_authority_deg_s(rate_of(5.0))))
+    print("                 resolutie %.4f graden" % (1.0 / STEPS_PER_DEG))
     print("max kruis-woord  %d stappen = %.1f cm" % (65536, steps_to_cm(65536)))
 
 
