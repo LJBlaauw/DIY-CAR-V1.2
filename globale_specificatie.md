@@ -2,17 +2,28 @@
 
 ## Systeembeschrijving
 
-Een autonoom rijdend robotkarretje dat een lichtbron opzoekt, er naartoe rijdt en met een grijparm een voorwerp oppakt en dan weer naar de begin positie terug keert.
+Een autonoom rijdend robotkarretje dat een lichtbron opzoekt, ernaartoe rijdt, met een grijparm een voorwerp oppakt en daarna naar de beginpositie terugkeert.
+
+### Status van waarden
+
+In dit document worden ontwerpwaarden waar nodig als volgt aangeduid:
+
+- **[GEMETEN]** — rechtstreeks op de huidige robot/hardware gemeten.
+- **[BEREKEND]** — afgeleid uit gemeten waarden, datasheetwaarden of softwareconstanten.
+- **[AANNAME]** — gebruikt in het ontwerpmodel, maar nog niet voldoende gemeten.
+- **[TE VERIFIËREN]** — hardware- of softwaregedrag dat nog expliciet getest moet worden.
+
+Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke nauwkeurigheid. Wielslip, bandvervorming, sensorbias, mechanische speling en kalibratie blijven afzonderlijke foutbronnen.
 
 ### Werkvolgorde
 
 1. **LDR-scan** — Draai in één richting een volledige omwenteling + overlap (**370°**) en meet lichtsterkte met twee gepaarde LDR's. Een volledige omwenteling bevat altijd het maximum; de 10° overlap voorkomt dat een piek rond 0°/360° op de rand valt. Er is dus géén pre-roll (terugdraaien vóór de scan) meer nodig.
-2. **Uitlijnen** — Draai naar de gevonden richting via de **kortste weg** (door- of terugdraaien, afhankelijk van welke hoek kleiner is). De laatste graden worden altijd in dezelfde richting benaderd zodat de speling/backlash constant blijft. De eindpositie wordt closed-loop bijgeregeld via de LDR's (zie hieronder), zodat stepper-slip gecorrigeerd wordt.
+2. **Uitlijnen** — Draai naar de gevonden richting via de **kortste weg** (door- of terugdraaien, afhankelijk van welke hoek kleiner is). De laatste graden worden altijd in dezelfde richting benaderd zodat de speling/backlash constant blijft. De eindpositie wordt closed-loop bijgeregeld via de LDR's (zie hieronder). Daarmee worden hoek-/uitlijnfouten door gemiste stappen of mechanische afwijking gecorrigeerd; dit is geen detectie of correctie van algemene lineaire wielslip.
 3. **Rijden met LDR-correctie** — Rij naar de lichtbron en corrigeer onderweg continu op koersafwijking: zolang er een verschil tussen de twee LDR-waarden (na gain-correctie) optreedt, stuurt de kar bij richting de helderste kant tot A ≈ B. Stop op ingestelde afstand via de ultrasoonsensor (draait onafhankelijk in de achtergrond, SM4).
 4. **Grijpen** — Bestuur twee scharnier-servo's zodat de arm het voorwerp bereikt.
 5. **Sluiten grijper** — Servo 4 met stroombeperking (PI-limiter) zodat de servo niet overbelast raakt.
-6. **Terugkeren** — Omdraaien en terug naar startpositie; voorwerp neerzetten.
-7. *(Optioneel)* Gyroscoop/kompas voor nauwkeurige terugnavigatie — nog niet geïmplementeerd.
+6. **Terugkeren** — Omdraaien en via opgeslagen wielodometrie/trajectinformatie terug naar de startpositie; voorwerp neerzetten. De nauwkeurigheid hiervan wordt begrensd door cumulatieve odometriefout en wielslip.
+7. **GY9250-ondersteuning** — gyro en magnetometer kunnen de oriëntatie/koers ondersteunen. Ze leveren geen absolute X/Y-positie. Software is aanwezig, maar integratie en hardwarekalibratie zijn nog niet gevalideerd.
 
 ---
 
@@ -31,11 +42,25 @@ Een autonoom rijdend robotkarretje dat een lichtbron opzoekt, er naartoe rijdt e
 | Gyroscoop/kompas | 1 | GY9250 | I2C1: SDA=GPIO10, SCL=GPIO11 — *software aanwezig (`lib/GY9250`, fusie, stepper-koppeling); integratie en hardwarekalibratie nog niet gevalideerd* |
 | Stroomsensor grijper | — | 0,1 Ω shunt + opamp (gain 14×) | ADC2 = GPIO28 |
 | LED | 1 | WS2812B | GPIO6 |
-| WiFi | 1 | CYW43 (onboard Pico 2 W) | — (SPI intern, geen vrije GPIO's) |
+| WiFi/Bluetooth | 1 | Infineon CYW43439 (onboard Pico 2 W) | interne boardverbinding |
 
-De controller is een **Pico 2 W**: de RP2350 met onboard CYW43-WiFi. Deze WiFi wordt gebruikt voor de webserver/websocket-besturing (zie module hieronder). De CYW43-driver draait op core 0.
+De robotcontroller is een **Raspberry Pi Pico 2 W** met een **RP2350** microcontroller en een onboard **Infineon CYW43439** wireless controller. In MicroPython wordt deze via de CYW43-driver aangestuurd. De webserver/websocket-besturing gebruikt WiFi; de geplande softwarearchitectuur houdt netwerk- en hoofdcontroltaken op core 0 en reserveert core 1 voor GY9250/displaytaken. Deze coreverdeling moet nog als geheel op hardware worden gevalideerd.
 
 Zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md) voor de volledige GPIO-tabel en verificatiestatus.
+
+### Ontwikkelomgeving
+
+| Onderdeel | Configuratie |
+|---|---|
+| Robotboard | Raspberry Pi Pico 2 W |
+| Microcontroller | RP2350 |
+| Robotfirmware | MicroPython voor Pico 2 W — **exacte versie/build nog vastleggen** |
+| Ontwikkel-PC | Fedora Linux 44 |
+| Desktop | KDE Plasma |
+| PC-tests | CPython; pure-Python tests uit `tests/` |
+| Hardwarevalidatie | logic analyzer voor PIO/STEP-timing; multimeter/meetopstelling voor voeding en sensorkalibratie |
+
+> **[TE VERIFIËREN] Reproduceerbaarheid:** leg vóór de definitieve hardwaretest de exacte MicroPython-versie/build en de gebruikte CPython-versie vast. De software gebruikt RP2350-specifieke voorzieningen zoals PIO2 en `rp2.DMA()`.
 
 ---
 
@@ -69,14 +94,15 @@ De RP2350 heeft 16 DMA-kanalen; `treq_sel = (pio_num << 3) + sm_num` (klopt ook 
 Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk via eigen SM en teller-SM.
 
 **Constanten:**
-- `WHEEL_CIRC = 19,1 cm` — **gemeten** wielomtrek. Was 20,94 cm; die waarde gaf **8,8 % te korte afstanden** (50 cm gecommandeerd → 45,6 cm gereden). De belaste rolomtrek van een rubberwiel is iets kleiner dan de vrije omtrek, dus deze waarde nog kalibreren (zie *Odometriekalibratie* hieronder).
-- `TRACK_WIDTH = 13,6 cm` — spoorbreedte hart-op-hart. Nodig voor elke rotatie- en koersberekening.
-- `STEPS_REV = 12800` — stappen per omwenteling (**1/64 microstepping**, TMC2209: 200 volle stappen × 64). MS-pinnen hardwired: **MS1 → GND, MS2 → +5V** (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md)).
-- `CM_PER_STEP ≈ 14,9 µm/stap`
-- `STEPS_PER_DEG ≈ 159` — stappenverschil tussen de wielen per graad koersverandering. Resolutie dus **0,0063°**.
-- `F_PIO = 15 MHz` — 150 MHz sysclk / 10, dus een **integer klokdeler** (geen jitter van de fractionele deler). Bij de topsnelheid van 12800 stappen/s is de delay-waarde 1167 cycles → snelheidsresolutie 0,085 %. De STEP-puls blijft 733 ns, ruim boven het TMC2209-minimum van ~100 ns.
+- **[GEMETEN]** `WHEEL_CIRC = 19,1 cm` — wielomtrek. Was 20,94 cm; die waarde gaf **8,8 % te korte afstanden** (50 cm gecommandeerd → 45,6 cm gereden). De belaste rolomtrek van een rubberwiel is iets kleiner dan de vrije omtrek, dus deze waarde nog kalibreren (zie *Odometriekalibratie* hieronder).
+- **[GEMETEN]** `TRACK_WIDTH = 13,6 cm` — geometrische spoorbreedte hart-op-hart. Nodig voor elke rotatie- en koersberekening.
+- `STEPS_REV = 12800` — stappen per omwenteling (**1/64 microstepping**, TMC2209: 200 volle stappen × 64). MS-pinnen hardwired: **MS1 → GND, MS2 → VCC_IO** *(in de huidige documentatie als +5 V aangegeven; fysiek verifiëren)* (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md)).
+- **[BEREKEND]** `CM_PER_STEP ≈ 14,9 µm/stap`
+- **[BEREKEND]** `STEPS_PER_DEG ≈ 159` — stappenverschil tussen de wielen per graad koersverandering. Resolutie dus **0,0063°**.
+- **[BEREKEND/CONFIG]** `F_PIO = 15 MHz` — 150 MHz sysclk / 10, dus een **integer klokdeler** (geen jitter van de fractionele deler). `speed_to_delay()` geeft bij de topsnelheid van 12800 stappen/s de waarde **576**. De delaylus van déze PIO is twee instructies (`nop().side(0)` + `jmp(y_dec)`), dus elke eenheid is 2 cycles en de **snelheidsresolutie is 0,17 %**. De STEP-puls blijft 11 cycles = **733 ns**, ruim boven het TMC2209-minimum van ~100 ns.
+  > De vaak genoemde 1167 cycles en 0,085 % horen **niet** hier maar bij `_delay_for()` in `stepper_ramp.py`, waar de delaylus één cycle per eenheid is. Verwissel die twee niet.
 
-> **`OVERHEAD` in `speed_to_delay()`:** blijft op de op hardware gemeten 9. Bij 15 MHz zakt de resterende snelheidsafwijking bij topsnelheid automatisch van ~2,3 % naar ~0,43 %, dus hermeten is niet meer nodig. (Eerder stond hier ~11 %; dat was te hoog ingeschat.)
+> **`OVERHEAD` in `speed_to_delay()`:** blijft op de op hardware gemeten 9. De PIO-lus kost werkelijk 13 cycles vaste overhead terwijl de formule er 18 aanneemt; bij 15 MHz zakt die **systematische** afwijking bij topsnelheid automatisch van ~2,3 % naar ~0,43 %, dus hermeten is niet meer nodig. (Eerder stond hier ~11 %; dat was te hoog ingeschat.) Daar komt nog de afkapping van `int()` bij, maximaal 2 cycles ≈ 0,17 %.
 
 **Publieke functies:**
 
@@ -119,30 +145,32 @@ Het is een **API-grotendeels compatibele opvolger, geen drop-in replacement.** D
 | `reset_PIO_distance()` weigert tijdens een beweging | roep eerst `halt()` of `brake()` aan |
 | Ongeldige invoer geeft `ValueError` i.p.v. stil door te rekenen | een negatieve `dist` werd eerder stil positief gemaakt |
 
-#### Ontwerpbasis (gemeten)
+#### Ontwerpbasis
 
 | Grootheid | Waarde |
 |---|---|
-| Massa kar | 1636 g |
-| Wielomtrek / -radius | 19,1 cm / 3,04 cm |
-| Spoorbreedte (hart-op-hart) | 13,6 cm |
+| Massa kar | **[GEMETEN]** 1636 g |
+| Wielomtrek / -radius | **[GEMETEN/BEREKEND]** 19,1 cm / 3,04 cm |
+| Spoorbreedte (hart-op-hart) | **[GEMETEN]** 13,6 cm geometrisch |
 | Motor | 17HS8401 — NEMA 17, 1,7 A, 52 N·cm, 1,8 Ω, 3,2 mH, rotor 68 g·cm² |
 | Driver | TMC2209, standalone, **stealthChop**, 1/64 microstepping |
-| VREF / motorstroom | 1,0 V → **0,71 A RMS** (= 42 % van nominaal) |
+| VREF / motorstroom | **[BEREKEND, TE VERIFIËREN]** 1,0 V → ca. **0,71 A RMS** volgens huidige driveraannames; controleer sense-resistor/driveruitvoering |
 | Motorspanning | 24 V (6S Li-ion, 25,2 V vol → ~18 V leeg) |
-| Bereik snelheid | start 0,1 omw/s = 1,91 cm/s · max 1,0 omw/s = 19,1 cm/s |
+| Bereik snelheid | **[ONTWERPWAARDE, TE VERIFIËREN]** start 0,1 omw/s = 1,91 cm/s · max 1,0 omw/s = 19,1 cm/s |
 
-**Koppelbegroting** — hieruit volgt dat de ramp de juiste oplossing is en méér stroom niet nodig:
+**Koppelbegroting [BEREKEND]** — deze begroting ondersteunt de keuze voor een ramp en laat op papier ruime koppelmarge zien; de werkelijke marge moet met de huidige motorstroom en belasting op hardware worden bevestigd:
 
 | Post | Koppel per wiel |
 |---|---|
-| Versnellen van 1636 g bij 55 cm/s² | 1,43 N·cm |
+| Versnellen van 1636 g bij 55 cm/s² | 1,37 N·cm |
 | Rotor-inertie (68 g·cm²) | 0,013 N·cm |
 | Rolweerstand (ruim geschat) | ~1,2 N·cm |
-| **Totaal nodig** | **~2,7 N·cm** |
+| **Totaal nodig** | **~2,6 N·cm** |
 | **Beschikbaar bij VREF 1 V** | **~22 N·cm** → factor 8 marge |
 
-Bij 22 N·cm en wielradius 3,04 cm is de trekkracht 7,2 N per wiel (14,5 N totaal) tegen een gewicht van 16,1 N: de **wielen slippen eerder dan dat de motor koppel tekortkomt**. Daarom blijft VREF op 1,0 V (1,8 W dissipatie i.p.v. 10,4 W bij vol stroom). stealthChop volstaat: het praktische plafond is ~300 rpm en de kar draait op 60 rpm. De SPREAD-pin hoeft niet verbonden te worden.
+De post "versnellen" is `m·a/2 × r` = 1,636 kg × 0,55 m/s² ÷ 2 wielen × 0,0304 m; de eigen traagheid van de wielen zit er nog niet in, maar die is bij deze marge niet interessant.
+
+Bij 22 N·cm en wielradius 3,04 cm is de trekkracht 7,2 N per wiel (14,5 N totaal) tegen een gewicht van 16,1 N: de **wielen slippen eerder dan dat de motor koppel tekortkomt**. Daarom is VREF = 1,0 V voorlopig een passende ontwerpinstelling (1,8 W dissipatie i.p.v. 10,4 W bij vol stroom). stealthChop volstaat: het praktische plafond is ~300 rpm en de kar draait op 60 rpm. De SPREAD-pin hoeft niet verbonden te worden.
 
 #### FIFO-woordformaat
 
@@ -153,7 +181,7 @@ Elk 32-bit woord in de TX-FIFO codeert een heel **segment** in plaats van één 
 | 15..0 | aantal stappen in dit segment − 1 (max 65536) |
 | 31..16 | delay per stap in PIO-cycles (max 65535) |
 
-Daardoor kost een ramp van 2200 stappen maar 256 woorden = **1 kB**. Eén woord per stap zou 36 kB per ramp zijn (147 kB voor twee ramps × twee motoren) en dat past niet betrouwbaar in de MicroPython-heap. Een kruisfase tot **97,8 cm** past in één enkel woord.
+Daardoor kost een ramp van 2200 stappen maar 256 woorden = **1 kB**. Eén 32-bit woord per stap zou 2200 × 4 = **8800 bytes ≈ 8,6 KiB per ramp** kosten. Vier losse tabellen (op/af voor twee motoren) zouden samen ongeveer **34,4 KiB** vragen, exclusief Python-objectoverhead. Segmentcodering reduceert dit sterk. Een kruisfase tot **97,8 cm** past in één enkel woord.
 
 De PIO-lus is 7 instructies; vaste overhead **5 cycles per stap** (0,43 % bij topsnelheid).
 
@@ -205,7 +233,7 @@ De teller-SM's tellen **STEP-flanken** en weten niets van de richting. Een ruwe 
 | `distance()` | `(travel_A + travel_B) / 2 × CM_PER_STEP` — een rotatie geeft ~0 cm, achteruit telt negatief |
 | `heading()` | `(travel_A − travel_B) / STEPS_PER_DEG` — werkt ook bij een rotatie op de plaats |
 
-> **Let op:** de tellers tellen *commando's*, geen beweging. Bij wielslip (hobbel, gleuf) lopen ze door. Voor werkelijke beweging is de GY9250 nodig.
+> **Let op:** de tellers tellen STEP-pulsen/commando's, geen gegarandeerde fysieke wielverplaatsing. Bij slip of een gemiste motorstap kan de odometrie dus afwijken. De GY9250 levert een onafhankelijke meting van draaisnelheid en oriëntatie, maar geen absolute lineaire X/Y-positie; lineaire slip van beide wielen vraagt een externe positiereferentie om rechtstreeks te detecteren.
 
 #### Koerscorrectie — cascade LDR + gyro
 
@@ -273,7 +301,8 @@ Als globale **snelheids-override** (alles langzamer, bv. bij een obstakel) blijf
 
 ```python
 doel = approach.brake_target_cm(snelheid)   # lib/gripper/approach.py
-if ultrasoon.read_cm() <= doel:
+cm, kind = ultrasoon.read_cm()
+if kind == 'ok' and cm <= doel:
     mv.finish()
 ```
 
@@ -349,15 +378,21 @@ Als regressie ook de drie toestandsfouten die hierin zaten: `finish()` tijdens d
 
 **Rustposities (duty %):**
 
-- De onderstaande rust waarden worden vervangen door de automatisch of handmatig bepaalde rust toestanden.
+De definitieve rustposities worden automatisch of handmatig ingesteld en opgeslagen in `config.json`. De historische vaste waarden hieronder zijn alleen nog referentie.
 
-#| Servo | GPIO | Rust (duty%) | Functie |
-#|---|---|---|---|
-#| 1 | GPIO2 | 4,1% | Onderste scharnier arm |
-#| 2 | GPIO3 | 3,6% | Bovenste scharnier arm |
-#| 4 | GPIO22 | 2,0% | Grijper |
+<!-- Historisch, niet meer normatief:
+| Servo | GPIO | Rust (duty%) | Functie |
+|---|---|---|---|
+| 1 | GPIO2 | 4,1% | Onderste scharnier arm |
+| 2 | GPIO3 | 3,6% | Bovenste scharnier arm |
+| 4 | GPIO22 | 2,0% | Grijper |
+-->
 
-Deze waarden worden vervangen door de automatisch of handmatige instelling van de rust posities en op geslagen in een config.json
+| Servo | GPIO | Functie |
+|---|---|---|
+| 1 | GPIO2 | Onderste scharnier arm |
+| 2 | GPIO3 | Bovenste scharnier arm |
+| 4 | GPIO22 | Grijper |
 
 **PWM-tick:** GPIO5 (INPUT) moet fysiek verbonden zijn met GPIO2 (servo1 PWM). De falling edge triggert de servo-update ISR @ 50 Hz.
 
@@ -366,7 +401,7 @@ Deze waarden worden vervangen door de automatisch of handmatige instelling van d
 | Methode | Beschrijving |
 |---|---|
 | `servo_pos(nr, graden, graden_per_sec)` | Relatief t.o.v. rust (nooit onder rust). Voorbeeld: `servo_pos(1, 30)` → rust+30° |
-| `servo_rest(nr=None)` | Terug naar rust. Zonder argument: volgorde 4→1→2→3 @ 20°/s |
+| `servo_rest(nr=None)` | Terug naar rust. Zonder argument: volgorde 4→1→2 @ 20°/s |
 | `set_rest_pct(nr, pct)` | Stel rustpositie in als duty-% |
 | `servo_cur(mA, graden_per_sec)` | **SETPOINT-modus**: PI-regelaar houdt servo 4 op ingestelde stroom |
 | `servo_cur_limit(mA)` | **LIMIT-modus**: positie is leidend, stroom wordt begrensd door PI-limiter |
@@ -402,6 +437,8 @@ Ultrasoonsensor RCWL-1601 via PIO (SM4). Meet asynchroon in de achtergrond met p
 | `read_cm()` | `(cm, kind)` | Afstand in cm, afgerond op 0,1 cm |
 | `stop()` | — | Stop de SM |
 
+> **API-conventie:** `read_us()` en `read_cm()` retourneren altijd een tuple `(waarde, kind)`. Controleer `kind == 'ok'` voordat de waarde numeriek wordt gebruikt; bij `timeout` of `overflow` mag de afstand niet als geldig getal in de regelaar terechtkomen.
+
 De ldr-scan routine gebruikt inmiddels een eigen PIO-blok (SM8, zie tabel hierboven) in plaats van hetzelfde blok als de ultrasoonsensor (SM4) — de RP2350 heeft 3 onafhankelijke PIO-blokken. Hiermee is het eerder gemelde PIO-conflict tussen ultrasoon en ldr-scan opgelost; SM4 hoeft niet meer gestopt te worden tijdens de LDR-scan.
 
 ---
@@ -427,13 +464,13 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 **Config:**
 - `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
 - `WHEEL_BASE_CM = 13,6 cm` — spoorbreedte hart-op-hart, voor graden→cm omrekening. **Stond op 18,5 cm**, terwijl de gemeten spoorbreedte 13,6 cm is; een gecommandeerde 370°-scan draaide daardoor in werkelijkheid **503°**. Moet gelijk blijven aan `TRACK_WIDTH` in `stepper_ramp.py`; empirische correctie (tyre-scrub, backlash) hoort in `ROT_SCALE`.
-- `LDR_R_FIXED_OHM = 1000` — pull-up naar 3V3 (R29/R30). **Was 10 000.** Bij een LDR van 100–200 Ω gebruikte 10 kΩ maar 0,97 % van de ADC-schaal (≈40 werkelijke 12-bit codes); met 1 kΩ is dat 7,6 % (4965 codes) — een factor 7,8. Dat is nodig voor de bundelas-bepaling, die een Q-daling van ~34 LSB's moet zien.
-- `LDR_R_MIN_OHM = 20` — ondergrens procentschaal. **Was 60**, waardoor de schaal dichtbij de bron vastklemde op 100 % en de eindfase geen informatie meer had.
-- `LDR_R_MAX_OHM = 20 000` — ongewijzigd. Over 20 Ω … 20 kΩ blijft de resolutie 79–1024 werkelijke codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
-- `LDR_GAIN_B = 1,136` — kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde ook de tolerantie van het oude 10 kΩ-weerstandspaar.
+- **[CONFIG]** `LDR_R_FIXED_OHM = 1000` — pull-up naar 3V3 (R29/R30). **Was 10 000.** Voor een LDR van 100–200 Ω geeft 10 kΩ ongeveer **0,99–1,96 % full-scale** (ca. 41–80 echte 12-bit counts); 1 kΩ geeft ongeveer **9,1–16,7 % full-scale** (ca. 372–683 echte 12-bit counts). MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
+- **[CONFIG]** `LDR_R_MIN_OHM = 20` — ondergrens procentschaal. **Was 60**, waardoor de schaal dichtbij de bron vastklemde op 100 % en de eindfase geen informatie meer had.
+- **[CONFIG]** `LDR_R_MAX_OHM = 20 000` — ongewijzigd. Over 20 Ω … 20 kΩ blijft de resolutie 79–1024 werkelijke codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
+- **[TE KALIBREREN]** `LDR_GAIN_B = 1,136` — huidige kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde ook de tolerantie van het oude 10 kΩ-weerstandspaar.
+- `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 samples. De scan houdt drie `array`'s van 1110 woorden aan (LDR A, LDR B, stapperstand), samen ~13 KB; ruim binnen RAM.
 
 **Delertopologie:** `R_FIXED` is de **pull-up** naar 3V3, de LDR de pull-down naar GND. Fel licht → lage LDR-weerstand → **lage** ADC-waarde. `_adc_to_res_ohm()` rekent daarop. Controle: schijn licht op LDR A en lees de ruwe ADC; gaat die naar **nul**, dan is de aanname juist.
-- `TARGET_SAMPLES_PER_DEG = 3` (bij 370° ≈ 1110 samples; ~13 KB buffers, ruim binnen RAM)
 
 **Publieke functies:**
 
@@ -464,7 +501,7 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 ### Rijden naar de lichtbron — positioneren op de bundelas
 
-**Doel: de kar positioneert zich *recht voor* de lichtbron**, op `STOP_DIST_CM = 13,3 cm` (ultrasoon) van het voorwerp — bij de default `OBJECT_W_CM = 6,0 cm`. Rond dit niet af naar 13 cm: bij een gemikte eindnauwkeurigheid van ~0,3 cm eet die afronding de hele foutbegroting op. Dat is meer dan ernaar kijken, en dat verschil bepaalt het hele algoritme.
+**Doel: de kar positioneert zich *recht voor* de lichtbron**, op `STOP_DIST_CM = 13,3 cm` (ultrasoon) van het voorwerp — bij de default `OBJECT_W_CM = 6,0 cm`. Rond dit niet af naar 13 cm: bij een **ontwerpdoel** voor de eindnauwkeurigheid van ~0,3 cm eet die afronding de hele foutbegroting op. Dat is meer dan ernaar kijken, en dat verschil bepaalt het hele algoritme.
 
 #### Twee onafhankelijke grootheden, twee signalen
 
@@ -490,11 +527,11 @@ waarbij de lichtsterktes van beide LDR's worden **opgeteld als `R_A^(−1/γ) + 
 - **Q constant terwijl je nadert** → je zit op de bundelas (φ = 0 op elke afstand).
 - **Q daalt terwijl je nadert** → je zit ernaast, want φ groeit. Uit de daling volgt `y`.
 
-Zonder deze normalisatie is dit niet te meten: van 60 naar 12 cm stijgt de ruwe helderheid al met een factor ~19 door 1/d², en dat overschaduwt elke laterale gradiënt.
+Zonder deze normalisatie is dit niet te meten: van 100 naar 12 cm stijgt de 1/d²-term al met een factor ~19 (zie de tabel hieronder), en dat overschaduwt elke laterale gradiënt.
 
 #### Waarom het licht dichtbij juist afneemt
 
-Met een gemeten bundel van `w ≈ 33°` (1/e-halfhoek) en een laterale afwijking van 20 cm:
+Met de huidige **[AANNAME/VOORLOPIGE SCHATTING]** `w ≈ 33°` (1/e-halfhoek) en een laterale afwijking van 20 cm:
 
 | Afstand | φ | `I(φ)` | 1/d² | ontvangen licht |
 |---|---|---|---|---|
@@ -503,6 +540,8 @@ Met een gemeten bundel van `w ≈ 33°` (1/e-halfhoek) en een laterale afwijking
 | **40 cm** | 26,6° | 0,52 | 5,2× | **1,00 ← piek** |
 | 20 cm | 45,0° | 0,16 | 13× | 0,74 |
 | 12 cm | 59,0° | 0,041 | 19× | 0,29 |
+
+De kolom `1/d²` is genormeerd op de rij van 100 cm en rekent met de **schuine** afstand √(d² + y²), niet met `d` alleen; de laatste kolom is `I(φ)` × die factor, genormeerd op de piek.
 
 De bundelafval verslaat 1/d². Vuistregel: **het ontvangen licht piekt rond `d ≈ 2y` en stort daarna in.**
 
@@ -544,7 +583,7 @@ Twee heel verschillende grootheden:
 
 Detectiedrempel voor `y` per meetbeen (beenlengte uit de odometer, ultrasoon ±3 mm, Q-drift 0,01):
 
-| Been | huidige bundel (w ≈ 33°) | spleet gehalveerd (w ≈ 16,5°) |
+| Been | voorlopig model (w ≈ 33°) | model met gehalveerde spleet (w ≈ 16,5°) |
 |---|---|---|
 | 60 → 45 cm | 4,55 cm | 2,27 cm |
 | 45 → 30 cm | 3,01 cm | 1,50 cm |
@@ -552,7 +591,9 @@ Detectiedrempel voor `y` per meetbeen (beenlengte uit de odometer, ultrasoon ±3
 | 20 → 14 cm | 1,72 cm | 0,86 cm |
 | **eindafwijking, één doorgang** | **≈ 2 cm** | **≈ 1 cm** |
 
-De eindwaarde wordt gezet door het laatste been waarop je nog kúnt bijstellen (~20 cm). **De beperking is de ultrasoon en de lichtdrift, niet de LDR of de ADC** — ADC-ruis draagt ~0,02 procentpunt bij en is verwaarloosbaar.
+Deze getallen komen uit `nauwkeurigheid()` in [`tests/test_ldr_beam.py`](tests/test_ldr_beam.py).
+
+De eindwaarde wordt gezet door het laatste been waarop je nog kúnt **bijstellen**, en dat is het been 30 → 20 cm (2,20 cm, afgerond ≈ 2 cm). Het been 20 → 14 cm staat er alleen ter informatie in: daar kan wel gemeten maar niet meer gecorrigeerd worden, want de zijstap moet vóór 20 cm klaar zijn (zie *Stilstaand nameten*). **De beperking is de ultrasoon en de lichtdrift, niet de LDR of de ADC** — ADC-ruis draagt ~0,02 procentpunt bij en is verwaarloosbaar.
 
 Hoe die laterale afwijking zich verhoudt tot wat de grijper kan verdragen staat in *Grijpergeometrie en eindpositionering* hieronder. Kort: **tot een objectbreedte van 4 cm volstaat de huidige opstelling; daarboven is de gehalveerde spleet nodig.**
 
@@ -573,8 +614,8 @@ Ter vergelijking: de spleet halveren wint een factor 2, de ultrasoonfout halvere
 - **`γ` (LDR-exponent) en `w` (bundelhalfhoek) moeten gemeten worden** — beide zitten in élke formule hierboven. Zie [`tests/test_ldr_beam.py`](tests/test_ldr_beam.py). De huidige `w ≈ 33°` komt uit één meetpunt met een *aangenomen* `γ = 0,7`; bij `γ = 0,9` is de bundel breder, bij `γ = 0,5` smaller.
 - **LDR-gain-kalibratie** (gevoeligheidsverschil A/B); zonder die correctie stuurt de kar scheef.
 - **Odometriekalibratie** (`WHEEL_CIRC`, `TRACK_WIDTH`).
-- **Hardware/code-koppeling:** na het verlagen van R29/R30 naar **1 kΩ** moet `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) óók 1000 worden. Blijft die op 10000, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt. Met 1 kΩ is het signaal in het werkgebied **7,8× groter** dan met 10 kΩ (7,6 % van de ADC-schaal i.p.v. 0,97 %) — en dat is precies wat de `y`-meting nodig heeft: die vraagt ~34 LSB's, en met 10 kΩ zou het 4,4 LSB's zijn en dus in de ruis verdwijnen.
-- **`LDR_R_MIN_OHM = 60` klemt** de procentschaal dichtbij de bron vast op 100 %. Zet hem op ~10, of werk in de eindfase direct in `ln R`.
+- **Hardware/code-koppeling:** na het verlagen van R29/R30 naar **1 kΩ** moet `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) óók 1000 worden. Blijft die op 10000, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt. Bij een LDR van 100 Ω staat het signaal met 1 kΩ op **9,1 %** van de ADC-schaal in plaats van 0,99 % — een factor **9,2** (zie de getallen bij `LDR_R_FIXED_OHM` hierboven). Belangrijker dan het niveau is de gevoeligheid: de `y`-meting moet een ΔQ van ~0,01 zien, en dat is met 1 kΩ ongeveer **38 u16-LSB's** tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Met 10 kΩ verdwijnt dat in de ruis.
+- `LDR_R_MIN_OHM` staat nu op **20 Ω** (was 60 Ω). Voor de bundelasberekening en eindfase heeft werken in `ln R` de voorkeur boven een afgekapte procentschaal; controleer op hardware of 20 Ω voldoende marge tegen verzadiging geeft.
 - **Grijsfilter** over de opening als de LDR fysiek verzadigt (100 Ω is erg laag voor CdS). Geen diffusor en geen kleinere opening — die verpesten de richtingsgevoeligheid.
 - **Arbitrage met het kompas:** tijdens de nadering is de **LDR leidend** voor de richting; de gyro-Z doet alleen storingsonderdrukking (dat is dus geen dubbele besturing). De **magnetometer** wordt tijdens het rijden níet gebruikt omdat de stappenmotoren het veld verstoren; die is voor de terugweg, waar een absolute koers nodig is.
 
@@ -599,7 +640,7 @@ tip_pos_cm(opening) = 12 + (9 − opening) × 3/7        →  0,43 cm vooruit pe
 
 #### De ultrasoon is alleen bruikbaar met de arm in rust
 
-Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan **achter** de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is zuiver. Bij 15° openingshoek is die bundel op 12–15 cm ongeveer **8 cm breed**, en de kaken staan 9 cm open — **zodra de arm uitklapt kijkt de sensor dus naar de eigen vingers.** Vanaf dat moment is er geen afstandsterugkoppeling meer.
+Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan **achter** de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is zuiver. Bij een halve openingshoek van 15° is die bundel 6,4 cm breed op 12 cm en **8 cm breed op 15 cm**, en de kaken staan 9 cm open — **zodra de arm uitklapt kijkt de sensor dus naar de eigen vingers.** Vanaf dat moment is er geen afstandsterugkoppeling meer.
 
 #### Drie afgeleide grootheden
 
@@ -624,7 +665,7 @@ Deze geometrie zat eerst in `stepper_ramp.py`. Dat maakte een generieke motordri
 
 #### Laterale nauwkeurigheid versus grijpertolerantie
 
-| Objectbreedte | Grijper-tolerantie | Huidige bundel (≈ ± 2 cm) | Spleet gehalveerd (≈ ± 1 cm) |
+| Objectbreedte | Grijper-tolerantie | Voorlopig model huidige bundel (≈ ± 2 cm) | Model gehalveerde spleet (≈ ± 1 cm) |
 |---|---|---|---|
 | 3 cm | ± 3,0 cm | ✓ ruim | ✓ ruim |
 | 4 cm | ± 2,5 cm | ✓ | ✓ |
@@ -632,7 +673,7 @@ Deze geometrie zat eerst in `stepper_ramp.py`. Dat maakte een generieke motordri
 | 6 cm | ± 1,5 cm | ✗ te krap | ✓ |
 | 7 cm | ± 1,0 cm | ✗ te krap | ⚠ op de grens |
 
-**Hiermee is het halveren van de spleet geen optie meer maar een vereiste** voor voorwerpen breder dan 4 cm.
+**Ontwerpverwachting:** met de huidige modelparameters is een gehalveerde spleet nodig voor voorwerpen breder dan 4 cm. Dit wordt pas een definitieve systeemeis nadat `γ` en `w` met `tests/test_ldr_beam.py` zijn gemeten en de laterale fout op de robot is gevalideerd.
 
 #### Stilstaand nameten — het laatste correctiemoment
 
@@ -641,7 +682,7 @@ Omdat de bundel vrij is zolang de arm in rust staat, kan er ná het stoppen maar
 | | Onzekerheid in de afstand |
 |---|---|
 | stoppen bij 5 cm/s (committed + latentie) | 0,74 cm |
-| **stilstaand nameten + kruipcorrectie** | **≈ 0,3 cm** (sensornauwkeurigheid) |
+| **stilstaand nameten + kruipcorrectie** | **ontwerpdoel ≈ 0,3 cm**; hardwarevalidatie nodig |
 
 `approach.finetune(read_cm, object_w_cm)` doet dit (in [`lib/gripper/approach.py`](lib/gripper/approach.py)): gemiddelde over 8 **onafhankelijke** metingen (wachttijd > `INTERVAL_MS` = 50 ms, anders lees je dezelfde gebufferde waarde) en daarna `creep()` naar het doel. Bij 2 cm/s is er praktisch geen ramp nodig, dus de kruipbeweging is meteen exact en zacht. Na een correctie wordt **altijd** opnieuw gemeten, ook na de laatste poging — anders zou het oordeel op de meting van vóór die correctie gebaseerd zijn.
 
@@ -653,7 +694,7 @@ De **laterale** afwijking kan níet worden nagemeten: de `y`-bepaling uit de Q-d
 |---|---|---|---|
 | 1–7 | naderen, bundelas, afremmen naar 5 cm/s | bruikbaar | LDR + gyro + ultrasoon |
 | 8 | stoppen rond `STOP_DIST_CM` | bruikbaar | |
-| 9 | **`finetune()`** — stilstaand nameten, gemiddeld | bruikbaar | laatste kans op ± 0,3 cm |
+| 9 | **`finetune()`** — stilstaand nameten, gemiddeld | bruikbaar | laatste correctiemoment; ontwerpdoel ± 0,3 cm |
 | 10 | **`creep()`** naar `stop_dist_cm(breedte)` | bruikbaar | |
 | 11 | arm uitklappen **boven** het voorwerp, dan zakken | **blind** | open-loop |
 | 12 | grijpen; toppen lopen 12 → 15 cm vooruit | **blind** | stroombegrenzing via PI op ADC2 |
@@ -681,7 +722,7 @@ De twee bankmetingen zijn zo opgezet dat ze elk **één factor isoleren**: `gamm
 
 ### `webserver` — microdot-websocket (Pico 2 W)
 
-Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karretje vanuit een standaard browser bediend en uitgelezen kan worden. Draait op **core 0** naast de besturing (CYW43/lwIP draait daar ook); core 1 blijft voor GY9250 + display.
+Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karretje vanuit een standaard browser bediend en uitgelezen kan worden. Is ontworpen om op **core 0** naast de hoofdcontroltaken te draaien; core 1 is gereserveerd voor GY9250 + display. De interactie tussen MicroPython, CYW43/lwIP, `_thread` en de control-loop moet nog onder belasting worden gevalideerd.
 
 **Functionaliteit:**
 - **Sensoren uitlezen** (browser, ~5–10 Hz): LDR A/B in %, ultrasoon-afstand in cm (of time-out), kompasrichting in graden, servoposities in %, stepper-snelheid/richting/afgelegde weg.
@@ -691,7 +732,7 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 **Netwerk:** AP-modus (kar als eigen accesspoint) heeft de voorkeur voor mobiel gebruik; station-modus optioneel. SSID/wachtwoord in de centrale `config.json`.
 
 **Aandachtspunten / beperkingen (nog te implementeren):**
-- **Async-refactor vereist.** De besturing is nu volledig blokkerend (o.a. busy-wait `while sm.active(): pass` in `_wait_stepper_done`, blokkerende `scan()`/ADC-lussen). Die verhongeren de asyncio-event-loop. Nodig: coöperatieve taken met `await asyncio.sleep`, of een commandowachtrij + gedeelde state tussen webserver en een control-task.
+- **Async-refactor vereist.** De besturing is nu volledig blokkerend: busy-wait `while sm.active(): pass` in `_wait_stepper_done`, blokkerende `scan()`/ADC-lussen, en `ServoController.servo_rest()` zonder argument, die per servo met `time.sleep_ms(10)` wacht tot de positie bereikt is met een timeout van 5 s — dus tot ~15 s achter elkaar. Die verhongeren alle de asyncio-event-loop. Nodig: coöperatieve taken met `await asyncio.sleep`, of een commandowachtrij + gedeelde state tussen webserver en een control-task.
 - **Geheugen:** microdot + asyncio + lwIP + bestaande modules op ~520 KB RAM is haalbaar maar krap — bewaken.
 - **Veiligheid:** commandovalidatie en een verplichte deadman-stop (zie boven), zodat een rijdende kar bij connectieverlies niet doorrijdt.
 
@@ -700,11 +741,12 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 ## Bekende issues / TODO
 
 - [ ] `lib/LDR/ldr_scan_isr.py` — herzien scan-algoritme implementeren: 370°-scan (geen pre-roll), piek op A≈B-kruispunt i.p.v. som-maximum, kortste weg terug, en closed-loop uitlijnen via null-seek op A−B
-- [ ] Gyroscoop/kompas (GY9250) — nog niet geïmplementeerd, Er is code toegevoegd voor de GY9250 (basic en fusion) moet getest worden
-- [ ] OLED (SSD1306) — nog niet geïmplementeerd (voorstel van implementatie in de te doen.md file)
+- [ ] Gyroscoop/kompas (GY9250) — basis- en fusioncode is aanwezig; integratie, tekenconventie, bias, magnetometerkalibratie en hardwaregedrag met draaiende stappenmotoren nog testen.
+- [ ] OLED (SSD1306) — integratie nog niet geïmplementeerd; voorstel staat in `te doen.md`.
 - [x] GPIO-tabel gecontroleerd en geverifieerd tegen KiCad netlist V1.2 (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
-- [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module, de test all bewaren voor een snelle controlle test.
-- [x] Stepper 1/64: `STEPS_REV = 12800` in code gezet. MS-bedrading (MS1→GND, MS2→+5V) nog fysiek verifiëren. `OVERHEAD` hermeten is vervallen: `F_PIO` staat nu op 15 MHz waardoor de afwijking naar ~0,43 % zakt.
+- [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module; `test_all.py` behouden als snelle controletest.
+- [x] Stepper 1/64: `STEPS_REV = 12800` in code gezet. `F_PIO` staat op 15 MHz; de berekende resterende snelheidsafwijking is ~0,43 %.
+- [ ] TMC2209 MS-bedrading fysiek verifiëren: `MS1→GND`, `MS2→VCC_IO` (in huidige documentatie +5 V).
 - [x] `WHEEL_CIRC` gecorrigeerd naar de gemeten 19,1 cm (was 20,94 → 8,8 % te korte afstanden). `TRACK_WIDTH = 13,6 cm` toegevoegd.
 - [ ] `lib/stepper/stepper_ramp.py` op hardware testen: `MOTOR_TURN_SIGN` / `GYRO_Z_SIGN` / `LDR_DIFF_SIGN`, `CYCLES_FIXED` met een logic analyzer, maximale startsnelheid en versnelling meten, regelversterkingen `kp_ldr`/`kp_gyro` afstemmen. Daarna beslissen of `stepper.py` vervalt.
 - [ ] **Odometriekalibratie** — afstandsschaal (`WHEEL_CIRC`) en rotatieschaal (`TRACK_WIDTH`) opnemen in de kalibratiesessie. Zonder deze stuurt de kar structureel scheef.
@@ -715,20 +757,22 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [ ] **Delertopologie eenmalig verifiëren op hardware:** schijn licht op LDR A en lees de ruwe ADC. Gaat die naar nul, dan is `_adc_to_res_ohm()` juist; gaat die naar 65535, dan loopt de hele schaal omgekeerd en moet de formule `R_FIXED × (65535 − adc)/adc` worden.
 - [ ] **370°-scan opnieuw controleren** met de gecorrigeerde `WHEEL_BASE_CM`. Waren eerdere scans empirisch afgestemd op 18,5, dan wijken piekposities nu af.
 - [ ] **`γ` en `w` meten** met `tests/test_ldr_beam.py` (`gamma()` en `bundel()`). Beide constanten zitten in élke `y`-berekening; de huidige `w ≈ 33°` komt uit één meetpunt met een aangenomen `γ = 0,7`.
-- [ ] **Spleet lichtbron halveren — vereist voor voorwerpen breder dan 4 cm.** De grijper verdraagt maar ±(9 − breedte)/2 cm laterale afwijking, en de huidige bundel haalt ≈ ±2 cm. Zet de spleet **verticaal** (smal horizontaal). Eerst `bundel()` draaien, dan aanpassen, dan controleren of de 370°-scan de bron nog vindt vanaf de werkelijke startpositie.
+- [ ] **Spleet lichtbron halveren — voorlopig ontwerpvoorstel voor voorwerpen breder dan 4 cm.** De grijper verdraagt maar ±(9 − breedte)/2 cm laterale afwijking, en de huidige bundel haalt ≈ ±2 cm. Zet de spleet **verticaal** (smal horizontaal). Eerst `bundel()` draaien, dan aanpassen, dan controleren of de 370°-scan de bron nog vindt vanaf de werkelijke startpositie.
 - [x] Laterale tolerantie van de grijper vastgesteld: **±(9 − objectbreedte)/2 cm**. Zie *Grijpergeometrie en eindpositionering*.
 - [ ] **Kaakdiepte opmeten** (palm t.o.v. vingertoppen). Die zet de werkelijke ondergrens van het grijpvenster; nu conservatief op 12 cm gehouden, wat elk venster ~2 cm te smal maakt.
 - [ ] **Derde meetpunt van de grijper** bij ~5 cm opening. `tip_pos_cm()` is nu een rechte door twee punten; een vierstangenmechanisme geeft een kromme.
 - [ ] **Arm uitklappen boven het voorwerp en dan laten zakken**, in plaats van horizontaal naar voren vegen. Voorkomt dat een kaak het voorwerp omstoot bij een laterale afwijking. Vraagt een gecoördineerde beweging van servo 1 en 2.
 - [ ] Grijsfilter over de LDR-openingen als de cel fysiek verzadigt (100 Ω is erg laag voor CdS). Geen diffusor en geen kleinere opening — die verpesten de richtingsgevoeligheid.
 - [ ] **Naamgeving stappenmotoren inconsistent**: `stepper.py`/`stepper_ramp.py` noemen GPIO16/17/18 "motor A", maar [hardware/gpio_pinout.md](hardware/gpio_pinout.md) wijst GPIO16/17/18 toe aan stepper **B** (U2) en GPIO12/13/14 aan stepper A (U1). Functioneel geen probleem, maar code en schema spreken elkaar tegen. Kiezen welke de waarheid is.
-- [ ] **Voeding U5 (DSN-MINI-360, MP2307) buiten spec**: gespecificeerd ingangsbereik 4,75–23 V, accu levert 22,2 V nominaal en 25,2 V vol geladen. Er is een 28 V pin-compatibele versie gevonden; die inbouwen. Bij een doorgeslagen high-side schakelaar komt 25 V op de 5 V-rail te staan, wat Pico, servo's, OLED en ultrasoon in één keer meeneemt.
+- [ ] **BLOCKER vóór vol 6S-accubedrijf — voeding U5 (DSN-MINI-360, MP2307) buiten spec**: gespecificeerd ingangsbereik 4,75–23 V, accu levert 22,2 V nominaal en 25,2 V vol geladen. Er is een 28 V pin-compatibele versie gevonden; die inbouwen. Bij een doorgeslagen high-side schakelaar komt 25 V op de 5 V-rail te staan, wat Pico, servo's, OLED en ultrasoon in één keer meeneemt.
 - [ ] **Servo-rail scheiden van de logica-rail** (optioneel): alle servo's hangen op +5 V uit U5 (1,8 A continu / 3 A piek). Drie MG996R kunnen samen 3–4,5 A piek trekken. De grijper heeft al stroombegrenzing via de PI-regelaar op ADC2, en de servo's worden langzaam naar hun eindpositie gestuurd, dus in de praktijk blijft de stroom laag. Bij een onverklaarbare Pico-reset tijdens het grijpen is dit de eerste plek om te kijken.
-- [ ] Bulk-elco bij de VM-pin van U1/U2 verifiëren (≥100 µF, korte sporen). Bij 24 V is een spanningspiek uit motorkabel-inductie de klassieke doodsoorzaak van een TMC2209. Nooit de motorstekker loskoppelen terwijl VM aan staat.
+- [ ] **BLOCKER vóór langdurige motortest:** bulk-elco bij de VM-pin van U1/U2 verifiëren (≥100 µF, korte sporen). Bij 24 V is een spanningspiek uit motorkabel-inductie de klassieke doodsoorzaak van een TMC2209. Nooit de motorstekker loskoppelen terwijl VM aan staat.
 - [ ] `webserver` (microdot-websocket, Pico 2 W): sensoruitlezing, directe rijbesturing met deadman, hoog-niveau commando's; vereist async-refactor van de blokkerende besturing.
+- [ ] Exacte MicroPython-build en CPython-versie vastleggen in deze specificatie.
+
 
 ---
 
 ## Afhankelijkheden
 
-Standaard MicroPython voor RP2350 (Pico 2 W, met CYW43-WiFi). Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython), `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).
+MicroPython voor **Raspberry Pi Pico 2 W (RP2350 + CYW43439)**. **Exacte firmwareversie/build nog vastleggen** voor reproduceerbaarheid. Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython), `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).
