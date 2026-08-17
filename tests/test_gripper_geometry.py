@@ -8,6 +8,8 @@
 #
 # De geometrie stond eerder in stepper_ramp.py; deze tests leggen de getallen
 # vast die in globale_specificatie.md en in de missiestrategie genoemd worden.
+# in de terminal: cd "/mnt/Intenso/Micropython/DIY CAR v1.2"
+# python3 tests/test_gripper_geometry.py
 # ================================================================
 
 import sys
