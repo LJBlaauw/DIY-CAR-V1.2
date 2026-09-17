@@ -1,4 +1,7 @@
 # Updating the code base
+
+**This is the translated version of the dutch version. The micropython code is not up to date and is a snapshot in the development. Use the Dutch version for your projects)**
+
 **All steps are implemented one after the other and first checked for correctness, problem analysis and solution proposals**
 1. Keep the PIO-asm code as far as possible.
 2. Order of implementation (due to interdependencies): first GY9250 compass, then display (shows, among other things, the compass direction), then WS2812B status, then the laser cross-control, then the LDR scan fixes, then servo calibration, then LDR calibration, then the stepper ramp (proposal). "Update global_specification.md" happens after each step, not just at the end.

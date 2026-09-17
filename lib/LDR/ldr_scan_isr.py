@@ -40,20 +40,28 @@ ROT_SCALE            = 1.0
 # (zie hardware/gpio_pinout.md, R29/R30). Fel licht -> lage LDR-weerstand ->
 # lage ADC-waarde. _adc_to_res_ohm() rekent daarop.
 #
-# R29/R30 zijn van 10 kΩ naar 1 kΩ gebracht: bij een LDR van 100-200 Ω gebruikte
-# 10 kΩ maar 0,97 % van de ADC-schaal (~40 werkelijke 12-bit codes), en met 1 kΩ
-# is dat 7,6 % — een factor 7,8. Dat is nodig voor de bundelas-bepaling, die een
-# Q-daling van ~34 LSB's moet zien; met 10 kΩ zou dat 4,4 LSB's zijn en dus in
-# de ruis verdwijnen. Over 20 Ω .. 20 kΩ blijft de resolutie 79-1024 werkelijke
-# 12-bit codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
-LDR_R_FIXED_OHM      = 1_000
+# R29/R30 zijn eerst van 10 kΩ naar 1 kΩ gebracht voor meer resolutie op de
+# bundelas (zie git-historie), maar zijn met de nieuwe, fellere lichtbron weer
+# TERUGGEZET naar 10 kΩ. [TE VERIFIËREN] Met 10 kΩ gebruikt een LDR van
+# 100-200 Ω maar 0,97 % van de ADC-schaal (~40 werkelijke 12-bit codes); de
+# eerdere zorg was dat de bundelas-bepaling (~34 LSB Q-daling nodig) daarmee
+# maar ~4,4 LSB overhoudt en in de ruis verdwijnt. Of de fellere bron dat
+# compenseert (hoger signaalniveau dichter bij de bron) moet nog op hardware
+# gecontroleerd worden — zie ook de 1 ms-gemiddelde sampling in
+# `measure_now()` hieronder en in `tests/test_ldr_beam.py`, die de 100Hz-
+# netrimpel onderdrukt maar niets doet aan deze ADC-quantisatie. Over
+# 20 Ω .. 20 kΩ blijft de resolutie 79-1024 werkelijke 12-bit codes per
+# e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
+LDR_R_FIXED_OHM      = 10_000
 # Ondergrens van de procentschaal. Stond op 60 Ω, maar op de bundelas dichtbij
 # komt de cel daaronder -> de schaal klemde dan vast op 100 % en de eindfase had
 # geen informatie meer. 20 Ω geeft marge en houdt nog ~79 codes per e-voud.
 LDR_R_MIN_OHM        = 20.0
 LDR_R_MAX_OHM        = 20_000.0
-# LET OP: LDR_GAIN_B compenseerde ook de tolerantie van het oude 10 kΩ-paar.
-# Na het verwisselen van R29/R30 moet deze factor OPNIEUW gekalibreerd worden.
+# LET OP: LDR_GAIN_B compenseert ook de tolerantie van het R29/R30-paar. Door
+# de wissel 10 kΩ -> 1 kΩ -> weer 10 kΩ (zie LDR_R_FIXED_OHM hierboven) is dit
+# niet meer gegarandeerd de juiste factor voor het huidige paar. OPNIEUW
+# kalibreren voordat op de absolute LDR-verhouding vertrouwd wordt.
 LDR_GAIN_A           = 1.0
 LDR_GAIN_B           = 1.136
 
@@ -187,6 +195,13 @@ def _wait_stepper_done(stepper_mod):
 # =========================
 
 def _on_pio_irq(sm):
+    """LET OP: de LDR_SAMPLES_PER_TICK samples hieronder volgen elkaar zonder
+    delay op (microseconden totaal), dus dit middelt GEEN 100Hz-netrimpel weg
+    zoals measure_now() dat doet — dit is een hardware-IRQ en mag niet
+    blokkeren. De rimpel komt hier terug als sample-tot-sample ruis over de
+    scan; de piekbepaling over een hele sweep is daar in de praktijk ongevoelig
+    voor, maar voor een losse, nauwkeurige meting gebruik measure_now().
+    """
     global _idx, _tick_counter, _segment_done
 
     if _tick_counter <= 0:
@@ -223,16 +238,23 @@ def attach_stepper_reader(fn):
     if callable(fn):
         _stepper_pos = fn
 
-def measure_now(n=8):
-    """Direct beide LDR-waarden lezen (%, tuple A/B)."""
+def measure_now(n=10, interval_ms=1):
+    """Direct beide LDR-waarden lezen (%, tuple A/B).
+
+    Samples 1 ms uit elkaar (default n=10 -> 10 ms = één 100Hz-netperiode),
+    zodat de netrimpel van de lichtbron zichzelf opheft in het gemiddelde
+    (zelfde truc als tests/test_ldr.py en tests/test_ldr_beam.py). Dit is GEEN
+    real-time context zoals _on_pio_irq() hieronder, dus blokkeren mag hier.
+    """
+    import time
     _init_hw()
     acc_a = 0
     acc_b = 0
-    m = n
-    while m:
+    for i in range(n):
         acc_a += _adc_a.read_u16()
         acc_b += _adc_b.read_u16()
-        m -= 1
+        if i < n - 1:
+            time.sleep_ms(interval_ms)
     adc_a = acc_a // n
     adc_b = acc_b // n
     ra = _adc_to_res_ohm(adc_a)

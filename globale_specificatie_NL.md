@@ -36,7 +36,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | Servomotor (grijper) | 1 | MG996R | GPIO22 — met stroomsensor |
 | Servomotor (optioneel/reserve) | 1 | MG996R | GPIO4 — bedraad op PCB, nog niet aangesloten/geïmplementeerd |
 | Ultrasoonsensor | 1 | RCWL-1601 | GPIO19 (Echo), GPIO20 (Trig) |
-| LDR | 2 | 1 kΩ spanningsdeler (pull-up naar 3V3) | GPIO26, GPIO27 |
+| LDR | 2 | 10 kΩ spanningsdeler (pull-up naar 3V3) | GPIO26, GPIO27 |
 | Laser (kruishaar) | 1 | — | GPIO15 via MOSFET |
 | OLED | 1 | SSD1306 | I2C0: SDA=GPIO0, SCL=GPIO1 |
 | Gyroscoop/kompas | 1 | GY9250 | I2C1: SDA=GPIO10, SCL=GPIO11 — *software aanwezig (`lib/GY9250`, fusie, stepper-koppeling); integratie en hardwarekalibratie nog niet gevalideerd* |
@@ -125,9 +125,13 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 - De teller-SM telt STEP-flanken en genereert een IRQ als het doel bereikt is.
 - IRQ-handler stopt de bijbehorende motor-SM en werkt de softwarepositie bij.
 
-**Beperking:** er is geen ramp. De snelheid wordt in één keer gecommandeerd, dus vanuit stilstand moet de rotor binnen één microstap (78 µs) naar de eindsnelheid springen. Dat is een oneindige versnelling: de rotor kan het veld niet volgen, verliest synchronisme en de motor blijft zoemend staan. Dit is een **synchronisme-fout, geen koppel-fout** — zie de koppelbegroting hieronder. `stepper_ramp.py` lost dit op.
+**Beperking:** er is geen ramp. De snelheid wordt in één keer gecommandeerd, dus vanuit stilstand moet de rotor binnen één microstap (78 µs) naar de eindsnelheid springen. Dat is een oneindige versnelling: de rotor kan het veld niet volgen, verliest synchronisme en de motor blijft zoemend staan. Dit is een **synchronisme-fout, geen koppel-fout** — zie de koppelbegroting hieronder. `stepper_ramp.py` of `stepper_rmp.py`lost dit op.
 
 ---
+
+### `lib/stepper/stepper_rmp.py`
+
+Dual stappenmotor controller **met ramp** (PIO + DMA) zelfde functie als `stepper.py` maar nu met ramp.
 
 ### `lib/stepper/stepper_ramp.py`
 
@@ -464,20 +468,22 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 **Config:**
 - `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
 - `WHEEL_BASE_CM = 13,6 cm` — spoorbreedte hart-op-hart, voor graden→cm omrekening. **Stond op 18,5 cm**, terwijl de gemeten spoorbreedte 13,6 cm is; een gecommandeerde 370°-scan draaide daardoor in werkelijkheid **503°**. Moet gelijk blijven aan `TRACK_WIDTH` in `stepper_ramp.py`; empirische correctie (tyre-scrub, backlash) hoort in `ROT_SCALE`.
-- **[CONFIG]** `LDR_R_FIXED_OHM = 1000` — pull-up naar 3V3 (R29/R30). **Was 10 000.** Voor een LDR van 100–200 Ω geeft 10 kΩ ongeveer **0,99–1,96 % full-scale** (ca. 41–80 echte 12-bit counts); 1 kΩ geeft ongeveer **9,1–16,7 % full-scale** (ca. 372–683 echte 12-bit counts). MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
+- **[CONFIG]** `LDR_R_FIXED_OHM = 10 000` — pull-up naar 3V3 (R29/R30). **Geschiedenis: 10 000 → 1000 → weer 10 000.** De stap naar 1 kΩ was voor meer resolutie op de bundelas (1 kΩ geeft ~9,1–16,7 % full-scale i.p.v. ~0,99–1,96 % bij 10 kΩ voor een LDR van 100–200 Ω, ca. 372–683 tegen 41–80 echte 12-bit counts), maar is met de nieuwe, fellere lichtbron weer teruggedraaid. **[TE VERIFIËREN]** of de eerdere zorg — dat de bundelas-Q-daling van ~34 LSB met 10 kΩ nog maar ~4,4 LSB overhoudt en in de ruis verdwijnt — met de fellere bron nog geldt. MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
 - **[CONFIG]** `LDR_R_MIN_OHM = 20` — ondergrens procentschaal. **Was 60**, waardoor de schaal dichtbij de bron vastklemde op 100 % en de eindfase geen informatie meer had.
 - **[CONFIG]** `LDR_R_MAX_OHM = 20 000` — ongewijzigd. Over 20 Ω … 20 kΩ blijft de resolutie 79–1024 werkelijke codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
-- **[TE KALIBREREN]** `LDR_GAIN_B = 1,136` — huidige kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde ook de tolerantie van het oude 10 kΩ-weerstandspaar.
+- **[TE KALIBREREN]** `LDR_GAIN_B = 1,136` — huidige kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde de tolerantie van een eerder R29/R30-paar, en is sindsdien twee keer van weerstandswaarde gewisseld (zie `LDR_R_FIXED_OHM` hierboven).
 - `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 samples. De scan houdt drie `array`'s van 1110 woorden aan (LDR A, LDR B, stapperstand), samen ~13 KB; ruim binnen RAM.
 
 **Delertopologie:** `R_FIXED` is de **pull-up** naar 3V3, de LDR de pull-down naar GND. Fel licht → lage LDR-weerstand → **lage** ADC-waarde. `_adc_to_res_ohm()` rekent daarop. Controle: schijn licht op LDR A en lees de ruwe ADC; gaat die naar **nul**, dan is de aanname juist.
+
+**100Hz-netrimpel:** een LED-lamp op 230V AC geeft rimpel op de gemeten LDR-spanning met een periode van 10 ms. `measure_now()` en de metingen in `tests/test_ldr_beam.py`/`tests/test_ldr.py` middelen daarom **10 samples, 1 ms uit elkaar** — 10 ms = precies één netperiode, dus de rimpel heft zichzelf op in het gemiddelde. De ISR-sampling tijdens `scan()` (`LDR_SAMPLES_PER_TICK` in `_on_pio_irq`) kan dit **niet** toepassen: die loopt in een hardware-IRQ die niet mag blokkeren, dus die samples volgen elkaar in microseconden op en middelen de netrimpel niet weg. Dat is in de praktijk geen probleem voor de piekbepaling over een hele sweep, maar wel relevant voor een losse, nauwkeurige aflezing — gebruik daarvoor `measure_now()`.
 
 **Publieke functies:**
 
 | Functie | Beschrijving |
 |---|---|
 | `scan(dir, speed_cm_s, graden, start_graden, go_max, excel, out_csv)` | Voer scan uit. Retourneert dict met resultaten en piekpositie |
-| `measure_now(n=8)` | Direct LDR-waarde lezen (%, tuple A/B) |
+| `measure_now(n=10, interval_ms=1)` | Direct LDR-waarde lezen (%, tuple A/B), 1 ms-gemiddeld tegen 100Hz-netrimpel |
 | `attach_stepper_reader(fn)` | Koppel stepper.pio_pos1 als positiebron voor de scan |
 
 **`scan()` retourneert:**
@@ -614,7 +620,7 @@ Ter vergelijking: de spleet halveren wint een factor 2, de ultrasoonfout halvere
 - **`γ` (LDR-exponent) en `w` (bundelhalfhoek) moeten gemeten worden** — beide zitten in élke formule hierboven. Zie [`tests/test_ldr_beam.py`](tests/test_ldr_beam.py). De huidige `w ≈ 33°` komt uit één meetpunt met een *aangenomen* `γ = 0,7`; bij `γ = 0,9` is de bundel breder, bij `γ = 0,5` smaller.
 - **LDR-gain-kalibratie** (gevoeligheidsverschil A/B); zonder die correctie stuurt de kar scheef.
 - **Odometriekalibratie** (`WHEEL_CIRC`, `TRACK_WIDTH`).
-- **Hardware/code-koppeling:** na het verlagen van R29/R30 naar **1 kΩ** moet `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) óók 1000 worden. Blijft die op 10000, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt. Bij een LDR van 100 Ω staat het signaal met 1 kΩ op **9,1 %** van de ADC-schaal in plaats van 0,99 % — een factor **9,2** (zie de getallen bij `LDR_R_FIXED_OHM` hierboven). Belangrijker dan het niveau is de gevoeligheid: de `y`-meting moet een ΔQ van ~0,01 zien, en dat is met 1 kΩ ongeveer **38 u16-LSB's** tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Met 10 kΩ verdwijnt dat in de ruis.
+- **Hardware/code-koppeling:** R29/R30 zijn (na een tussenstop op 1 kΩ) weer teruggezet naar **10 kΩ**, en `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) is meegewijzigd naar 10 000. Blijft die op 1000 staan terwijl de hardware op 10 kΩ zit, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt — `tests/test_ldr_beam.py` z'n `controleer_config()` vangt dat verschil af. **[TE VERIFIËREN]** de gevoeligheidszorg die destijds tot de stap naar 1 kΩ leidde: de `y`-meting moet een ΔQ van ~0,01 zien, wat met 1 kΩ ongeveer **38 u16-LSB's** was tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Of de nieuwe, fellere lichtbron dat verschil compenseert (hoger signaalniveau, dus effectief meer LSB's per ΔQ) moet nog op hardware bevestigd worden. De 1 ms-gemiddelde sampling in `measure_now()` (zie boven) onderdrukt alleen de 100Hz-netrimpel, niet deze ADC-quantisatiegrens.
 - `LDR_R_MIN_OHM` staat nu op **20 Ω** (was 60 Ω). Voor de bundelasberekening en eindfase heeft werken in `ln R` de voorkeur boven een afgekapte procentschaal; controleer op hardware of 20 Ω voldoende marge tegen verzadiging geeft.
 - **Grijsfilter** over de opening als de LDR fysiek verzadigt (100 Ω is erg laag voor CdS). Geen diffusor en geen kleinere opening — die verpesten de richtingsgevoeligheid.
 - **Arbitrage met het kompas:** tijdens de nadering is de **LDR leidend** voor de richting; de gyro-Z doet alleen storingsonderdrukking (dat is dus geen dubbele besturing). De **magnetometer** wordt tijdens het rijden níet gebruikt omdat de stappenmotoren het veld verstoren; die is voor de terugweg, waar een absolute koers nodig is.
@@ -751,9 +757,12 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [ ] `lib/stepper/stepper_ramp.py` op hardware testen: `MOTOR_TURN_SIGN` / `GYRO_Z_SIGN` / `LDR_DIFF_SIGN`, `CYCLES_FIXED` met een logic analyzer, maximale startsnelheid en versnelling meten, regelversterkingen `kp_ldr`/`kp_gyro` afstemmen. Daarna beslissen of `stepper.py` vervalt.
 - [ ] **Odometriekalibratie** — afstandsschaal (`WHEEL_CIRC`) en rotatieschaal (`TRACK_WIDTH`) opnemen in de kalibratiesessie. Zonder deze stuurt de kar structureel scheef.
 - [ ] Rijden-naar-licht: de segmentgewijze aanpak is **vervangen** door de doorlopende kruisfase met bijsturing per slice in `stepper_ramp.py`, plus positioneren op de **bundelas** via de genormaliseerde helderheid `Q`. Zie de sectie *Rijden naar de lichtbron*.
-- [x] `LDR_R_FIXED_OHM` naar 1000 en `LDR_R_MIN_OHM` naar 20 in `lib/LDR/ldr_scan_isr.py`, passend bij de nieuwe 1 kΩ pull-ups. Delertopologie gedocumenteerd in de code.
+- [x] `LDR_R_MIN_OHM` naar 20 in `lib/LDR/ldr_scan_isr.py`. Delertopologie gedocumenteerd in de code.
+- [x] `LDR_R_FIXED_OHM`: 10 000 → 1000 (voor resolutie op de bundelas) → **weer 10 000**, na het terugzetten van R29/R30 naar 10 kΩ met de nieuwe, fellere lichtbron. `tests/test_ldr_beam.py` (`controleer_config()`) waarschuwt als code en hardware uit elkaar lopen.
+- [x] `measure_now()` en de metingen in `tests/test_ldr_beam.py`/`tests/test_ldr.py` middelen nu **10 samples, 1 ms uit elkaar** tegen de 100Hz-netrimpel van de LED-lichtbron (10 ms = één netperiode). Geldt niet voor de ISR-sampling in `scan()`, die niet mag blokkeren.
 - [x] `WHEEL_BASE_CM` in `ldr_scan_isr.py` gecorrigeerd van 18,5 naar 13,6 cm — een 370°-scan draaide in werkelijkheid 503°.
-- [ ] **`LDR_GAIN_B` opnieuw kalibreren** na het verwisselen van R29/R30: die factor compenseerde ook de tolerantie van het oude 10 kΩ-paar.
+- [ ] **`LDR_GAIN_B` opnieuw kalibreren** na de weerstandswissels van R29/R30 (10 kΩ → 1 kΩ → 10 kΩ): die factor compenseerde de tolerantie van een eerder paar en is niet gegarandeerd nog juist.
+- [ ] **[TE VERIFIËREN]** of de fellere lichtbron de eerdere resolutiezorg bij 10 kΩ (~4,5 LSB ΔQ op de bundelas, tegen ~38 LSB met 1 kΩ) compenseert — zie *Randvoorwaarden / afhankelijkheden* hierboven.
 - [ ] **Delertopologie eenmalig verifiëren op hardware:** schijn licht op LDR A en lees de ruwe ADC. Gaat die naar nul, dan is `_adc_to_res_ohm()` juist; gaat die naar 65535, dan loopt de hele schaal omgekeerd en moet de formule `R_FIXED × (65535 − adc)/adc` worden.
 - [ ] **370°-scan opnieuw controleren** met de gecorrigeerde `WHEEL_BASE_CM`. Waren eerdere scans empirisch afgestemd op 18,5, dan wijken piekposities nu af.
 - [ ] **`γ` en `w` meten** met `tests/test_ldr_beam.py` (`gamma()` en `bundel()`). Beide constanten zitten in élke `y`-berekening; de huidige `w ≈ 33°` komt uit één meetpunt met een aangenomen `γ = 0,7`.

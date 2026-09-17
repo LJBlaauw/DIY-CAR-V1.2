@@ -1,5 +1,7 @@
 # DIY Robot CAR
 
+**This is the translated version of the dutch version. The micropython code is not up to date and is a snapshot in the development. Use the Dutch version for your projects)**
+
 **This project started with my brother-in-law's idea to make a robot cart**
 I have a background in electronics development (microcontrollers, power electronics and audio).
 This was unknown territory for my brother-in-law, so as often happens, I offered my help.

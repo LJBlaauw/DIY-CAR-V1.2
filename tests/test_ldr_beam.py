@@ -27,9 +27,15 @@
 # het teken kost nog een dither.
 #
 # LET OP - eenmalig te controleren:
-#   Na het verlagen van R29/R30 naar 1 kOhm MOET LDR_R_FIXED_OHM in
-#   lib/LDR/ldr_scan_isr.py ook op 1000 staan, anders zijn alle
-#   weerstandswaarden een factor 10 fout. Dit script controleert dat.
+#   R29/R30 zijn (na een tussenstop op 1 kOhm) weer teruggezet naar 10 kOhm.
+#   LDR_R_FIXED_OHM in lib/LDR/ldr_scan_isr.py MOET daarmee overeenkomen,
+#   anders zijn alle weerstandswaarden een factor 10 fout. Dit script
+#   controleert dat via controleer_config().
+#
+#   De metingen middelen 1 ms uit elkaar over N_SAMPLES (10 ms bij de default
+#   10 samples = precies één 100Hz-netperiode), zodat de netrimpel van de
+#   lichtbron (230V AC -> 100Hz) zichzelf opheft. Zie tests/test_ldr.py voor
+#   dezelfde aanpak.
 # ================================================================
 
 import math
@@ -47,10 +53,11 @@ sys.path.append("/lib/ultrasoon")
 LDR_PIN_A = 26
 LDR_PIN_B = 27
 
-R_FIXED_VERWACHT = 1000.0     # pull-up naar 3V3, na de hardwarewijziging
+R_FIXED_VERWACHT = 10_000.0   # pull-up naar 3V3, huidige hardwarestand
 ADC_MAX = 65535.0
 
-N_SAMPLES = 32                # gemiddelde per meting; onderdrukt ADC-ruis
+N_SAMPLES = 10                 # gemiddeld over SAMPLE_INTERVAL_MS uit elkaar
+SAMPLE_INTERVAL_MS = 1         # 10 x 1 ms = 10 ms = één 100Hz-netperiode
 CSV_DIR = "/"
 
 # Startwaarden; worden overschreven door gamma() en bundel()
@@ -99,10 +106,15 @@ def controleer_config():
 # ----------------------------------------------------------------
 # Basismeting
 # ----------------------------------------------------------------
-def _raw(adc, n=N_SAMPLES):
+def _raw(adc, n=N_SAMPLES, interval_ms=SAMPLE_INTERVAL_MS):
+    """Middelt n samples, interval_ms uit elkaar, om 100Hz-netrimpel weg te
+    middelen (zie tests/test_ldr.py). Bij n=10, interval_ms=1 is dat precies
+    één netperiode."""
     acc = 0
-    for _ in range(n):
+    for i in range(n):
         acc += adc.read_u16()
+        if i < n - 1:
+            time.sleep_ms(interval_ms)
     return acc / n
 
 
