@@ -1,0 +1,23 @@
+{
+  "servo": {
+    "1": {
+      "label": "arm - onderste scharnier (schouder)",
+      "rest_pct": 3.08,
+      "max_pct": 13.0,
+      "horizontal_pct": 12.5,
+      "note": "rest_pct = ingetrokken (0 graden, ook de rustpositie); max_pct = gemeten uiterste van de slag (180 graden); horizontal_pct = arm horizontaal gestrekt (losse referentiepositie, niet in de graden-mapping verwerkt). Handmatig gekalibreerd 2026-09-19."
+    },
+    "2": {
+      "label": "arm - bovenste scharnier (elleboog)",
+      "rest_pct": 2.6,
+      "max_pct": 13.0,
+      "note": "rest_pct = ingetrokken (0 graden, ook de rustpositie); max_pct = gemeten uiterste van de slag (180 graden). Handmatig gekalibreerd 2026-09-19."
+    },
+    "4": {
+      "label": "grijper",
+      "rest_pct": 3.0,
+      "max_pct": 8.6,
+      "note": "rest_pct = maximaal open (0 graden, ook de rustpositie); max_pct = maximaal dicht (180 graden). Handmatig gekalibreerd 2026-09-19."
+    }
+  }
+}

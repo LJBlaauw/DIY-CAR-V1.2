@@ -107,7 +107,12 @@ GPIO15 → R10 (100 Ω) → Q1 BS170 gate. Drain via J6 to laser. Source to GND.
 
 GPIO5 has **no PCB connection** (no-connect in schematic).
 Connect externally: a wire from GPIO2 (servo1 PWM output) to GPIO5 (input).
-The falling edge of the 50 Hz servo PWM signal triggers the servo update ISR.
+The **rising edge** of the 50 Hz servo PWM signal triggers the servo update ISR
+(not the falling edge: that shifts with the commanded servo angle, while the
+rising edge always sits on the fixed 20 ms period boundary). The same tick is
+also used to sample the LDRs at a fixed phase relative to the 100Hz mains
+ripple — see `lib/servo/servo_crl.py` (`attach_tick_callback`) and
+`lib/LDR/ldr_scan_isr.py` (`start_synced_sampling`/`read_synced`).
 
 ## Verified items (netlist V1.2)
 

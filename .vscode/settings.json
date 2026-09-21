@@ -6,6 +6,21 @@
     },
     "python.terminal.activateEnvironment": false,
     "micropico.openOnStart": true,
+    "micropico.syncFolder": "lib",
+    "micropico.additionalSyncFolders": ["tests"],
+    "micropico.pyIgnore": [
+        "**/.micropico",
+        "**/.vscode",
+        "**/.gitignore",
+        "**/.git",
+        "**/.DS_Store",
+        "**/.idea",
+        "**/__pycache__",
+        "**/*.pyc",
+        "hardware/**",
+        "english translations/**",
+        "*.md"
+    ],
     "python.analysis.typeshedPaths": [
         "~/.micropico-stubs/micropython-rp2-rpi_pico-stubs==1.26.0.post1",
         "~/.micropico-stubs/included"

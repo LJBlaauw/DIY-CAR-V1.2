@@ -95,7 +95,9 @@ STEPS_REV     = 12800        # 1/64 microstepping (TMC2209, 200 volle stappen x 
 CM_PER_STEP   = WHEEL_CIRC / STEPS_REV                 # ~14,9 um/stap
 STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # idem: alleen geometrie
 
-# Snelheidsgrenzen (motor 17HS8401, TMC2209 stealthChop, VREF 1 V = 0,71 A RMS)
+# Snelheidsgrenzen (motor 17HS8401, TMC2209 stealthChop, VREF 1,5 V = ca. 1,07 A RMS
+# sinds 2026-09-19, was 1 V/0,71 A; zie globale_specificatie_NL.md). V_MAX_CM_S
+# hieronder is BEWUST nog niet verdubbeld -- wacht op hardwarevalidatie.
 V_MAX_CM_S    = 19.1         # 1,0 omw/s
 V_START_CM_S  = 1.91         # 0,1 omw/s — veilige startsnelheid vanuit stilstand
 ACCEL_CM_S2   = 55.0         # bepaalt de ramp-afstand via (v1^2-v0^2)/(2a); zie stepper_ramp_NL.md

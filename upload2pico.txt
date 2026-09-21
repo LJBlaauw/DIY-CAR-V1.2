@@ -1,0 +1,1 @@
+cd "/mnt/Intenso/Micropython/DIY CAR v1.2" && ./upload_to_pico.sh

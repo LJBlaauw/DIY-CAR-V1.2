@@ -6,6 +6,8 @@
 
 # De micropython code voor de GY9250 is gedownload van de awesome-micropython website (auteur Tuupola).
 
+> **[BLOKKEREND — HARDWARE] Huidig bordje is géén GY-9250/MPU-9250, maar een kale MPU-6500** (2026-09-19). I2C-scan (zie [`tests/test_gy9250_i2c_scan.py`](tests/test_gy9250_i2c_scan.py)) laat zien dat de AK8963-magnetometer nooit op de bus verschijnt, ook niet na het correct zetten van de bypass-bit of bij 100kHz. De whoami van de accel/gyro-chip is **0x70** ("standalone MPU6500" — zie het commentaar in `lib/GY9250/mpu6500.py`); een echte MPU-9250 geeft **0x71**. Alle code die `sensor.magnetic`/AK8963 gebruikt (`GY9250_basic.py`, `GY9250_fusion.py`, `test_gy9250_calibrate.py`, `test_gy9250_auto_calibrate.py`, `automatische_calibratie_magnetische_verstoring.py`) kan hierdoor niet werken op dit exemplaar. **Besluit: nieuw, echt MPU-9250-bordje bestellen** — de bestaande software blijft ongewijzigd en zou moeten werken zodra whoami 0x71 teruggeeft en `0x0c` in de I2C-scan verschijnt (test opnieuw met hetzelfde scanscript).
+
  1. Deze micropython code voor de GY9250 gaat op core 1 van de RP2350 draaien, zodat de overige modules er geen last van hebben (rekenintensief).
  2. In het main programma kan gekozen worden of we `GY9250_basic.py` library functie importeren (alleen kompas functie) of de `GY9250_fusion.py` library functie (kompas plus accelerator correctie gaan gebruiken). **Let op:** deze bestanden bestaan nog niet in de repo — bij aanmaken de naamgeving consistent houden met de verwijzingen in dit document en in `globale_specificatie.md`.
  3. Zorg voor veilige data-uitwisseling tussen core 0 en core 1 (bv. een lock of atomische lees/schrijf) voor de gedeelde kompaswaarde — dit is niet automatisch veilig met `_thread` op de RP2350.
@@ -42,6 +44,7 @@
 
 # toevoegen besturing laser kruis
  1. Het laser kruis kan vanuit het hoofdprogramma aangestuurd worden met pwm regeling. pwm 0 is uit en pwm max is 100%
+ 2. ~~Laser fysiek uitlijnen.~~ **Gedaan (2026-09-19, gebruiker).** Relevant voor de LDR-kalibratieprocedure hieronder, die de laserpointer gebruikt om de kar handmatig op de lichtbron te richten voordat een meting genomen wordt.
 
 # fouten in de ldr-scan routine oplossen
  1. ~~Nu moet voordat de ldr_scan start de ultrasoonroutine gestopt worden.~~ **Opgelost**: ldr_scan gebruikt nu SM8 (PIO2 SM0), ultrasoon gebruikt SM4 (PIO1 SM0) — aparte PIO-blokken, geen conflict meer.
@@ -55,12 +58,12 @@
 # routine voor de kalibratie servomotoren toevoegen
 **De servomotoren hebben nu vast ingestelde rustwaarden, dit moet via een kalibratieroutine**
  1. De kalibratie verloopt via de REPL.
- 2. Automatisch: de kalibratie verloopt door de arm-servo's na elkaar op de grijper-servo-plug te plaatsen (dit is de enige connector met stroommeting). Door het meten van de stroom kan bepaald worden wanneer de servo in de uiterste stand komt (stroom overschrijdt de grenswaarde). Voer dan een kleine correctie door (pwm verminderen zodat er marge is) om te voorkomen dat de servo bij vastlopen veel stroom blijft verbruiken. Controleer daarna of de servo 180 graden gedraaid kan worden. Dit alles geldt alleen voor de arm-servo's.
- 3. De grijper (servo 4, GPIO22) mag nooit meer dan 90 graden geopend worden (maximale stand) — leg vast hoe de grijper zelf zijn rust- en eindposities kalibreert, los van de 180°-testprocedure van de arm-servo's hierboven.
+ 2. Automatisch: de kalibratie verloopt door de arm-servo's na elkaar op de grijper-servo-plug te plaatsen (dit is de enige connector met stroommeting). Door het meten van de stroom kan bepaald worden wanneer de servo in de uiterste stand komt (stroom overschrijdt de grenswaarde). Voer dan een kleine correctie door (pwm verminderen zodat er marge is) om te voorkomen dat de servo bij vastlopen veel stroom blijft verbruiken. Controleer daarna of de servo 180 graden gedraaid kan worden. Dit alles geldt alleen voor de arm-servo's. **Nog te doen** — de handmatige kalibratie (punt 5) is inmiddels gedaan, deze automatische stroom-gebaseerde routine niet.
+ 3. ~~De grijper (servo 4, GPIO22) mag nooit meer dan 90 graden geopend worden (maximale stand).~~ **Achterhaald/onjuist** (2026-09-19, gebruiker): de 90°-grens klopt niet. Met de handmatige kalibratie van punt 5 hieronder is dit sowieso opgelost op een robuustere manier: de grijper heeft nu zijn eigen gemeten, harde duty-grenzen (open 3,0% / dicht 8,6%) die `servo_crl.py` altijd klemt (`pct_min`/`pct_max`, zie `_clamp_pct()`) — een aparte hoek-gebaseerde veiligheidsgrens is dus niet meer nodig. Zie ook de kanttekening bij punt 5: de werkelijke mechanische slag van de gebruikte servo's is iets **groter dan 180°**, dus "graden" in `servo_pos()` is sowieso een genormaliseerde schaal tussen rust en max, geen letterlijk gemeten fysieke hoek.
  4. Servo 3 (GPIO4, connector J3) is een optionele, reserve servo-aansluiting — géén onderdeel van de grijper. Deze is op de PCB bedraad (KiCad-netlist V1.2 bevestigt de aansluiting), maar wordt momenteel niet aangestuurd en is nog niet geïmplementeerd in `ServoController` (`lib/servo/servo_crl.py`). Verduidelijk of deze aansluiting alsnog meegenomen moet worden in de kalibratieroutine, of dat servo 1, 2 en 4 voorlopig volstaan.
- 5. Handmatig: door het opgeven van pwm-waarden.
- 6. Alle grenswaarden vastleggen in de centrale configuratie op de RP2350 (zie boven).
- 7. Als de configuratie ontbreekt: rustpositie zetten op de huidige vaste standaardwaarden — het midden van de duty-range (50% van de 0–180° hoekrange) per servo (servo1 7,5%, servo2 7,5%, servo4 7,5% duty). Servo 3 (optioneel, nog niet geïmplementeerd) valt hier vooralsnog buiten.
+ 5. ~~Handmatig: door het opgeven van pwm-waarden.~~ **Gedaan (2026-09-19)**, per servo een eigen duty-bereik i.p.v. één gedeeld bereik: servo1 rust 3,08% / max 13,0% / horizontaal-gestrekt 12,5%; servo2 rust 2,6% / max 13,0%; servo4 (grijper) open 3,0% / dicht 8,6%. Zie [globale_specificatie_NL.md](globale_specificatie_NL.md) → `lib/servo/servo_crl.py`. **Kanttekening (gebruiker):** de werkelijke hoekverdraaiing van de huidige servo's is iets groter dan 180°; "rust" en "max" zijn dus de betrouwbare, gemeten ankerpunten, en "180°" in `servo_pos()` is een normalisatie daartussen, geen exacte fysieke hoekmeting.
+ 6. ~~Alle grenswaarden vastleggen in de centrale configuratie op de RP2350 (zie boven).~~ **Gedaan**: [`config.json`](config.json), sectie `"servo"` — eerste sectie van het geplande centrale configuratiebestand. GY9250/LDR/netwerk-secties volgen later.
+ 7. Als de configuratie ontbreekt: rustpositie zetten op de huidige vaste standaardwaarden. **Bijgewerkt**: dit waren de generieke midden-van-de-range-placeholders (7,5% voor alle drie); `lib/servo/servo_crl.py`'s `DEFAULT_REST_PCT`/`DEFAULT_MAX_PCT` bevatten nu de echte, hierboven gemeten kalibratiewaarden als fallback. Servo 3 (optioneel, nog niet geïmplementeerd) valt hier nog steeds buiten.
 
 # routine voor de kalibratie van de LDR's toevoegen
 **de LDR-weerstanden hebben onderling behoorlijk grote afwijkingen en moeten dus gecompenseerd worden. Voorheen hebben we ze twee aan twee gepaard. Nu gaan we een semi-automatische route maken**
@@ -106,7 +109,7 @@
  2. Directe rijbesturing: vooruit/achteruit/links/rechts + snelheid, met noodstop en een deadman/heartbeat (bij verbroken websocket of uitblijvende heartbeat stopt de kar automatisch).
  3. Hoog-niveau commando's: LDR-scan, rijden-naar-licht, grijpen, terugkeren, kalibratiemodus starten/stoppen.
  4. Async-refactor vereist: de besturing is nu blokkerend (busy-wait `while sm.active(): pass`, blokkerende `scan()`/ADC-lussen) en verhongert de asyncio-event-loop. Nodig: coöperatieve taken (`await asyncio.sleep`) of een commandowachtrij + gedeelde state tussen webserver en control-task.
- 5. Netwerk: AP-modus (kar als eigen accesspoint) heeft de voorkeur; station-modus optioneel. SSID/wachtwoord in de centrale `config.json`.
+ 5. Netwerk: AP-modus (kar als eigen accesspoint) heeft de voorkeur; station-modus optioneel. SSID/wachtwoord in de centrale `config.json`. **Vastgelegd (2026-09-19, gebruiker):** besturing en logging gebeuren altijd vanaf een aparte, externe pc/laptop/tablet die met het AP verbindt — nooit vanaf de pc die de Pico programmeert. Zie `globale_specificatie_NL.md` → webserver-sectie en `tests/test_data_logging.py`.
  6. Geheugen bewaken (microdot + asyncio + lwIP + bestaande modules op ~520 KB RAM is krap) en commandovalidatie/veiligheid borgen.
 
 # updaten globale_specificatie.md

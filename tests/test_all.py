@@ -5,6 +5,15 @@ import time
 import ultrasoon
 import rp2
 
+# LET OP (2026-09-19): servo_crl.py gebruikt sinds de handmatige kalibratie
+# een EIGEN duty-bereik per servo i.p.v. één gedeeld 2,5-12,5%-bereik (zie
+# config.json / globale_specificatie_NL.md). Voor de grijper (servo 4, nu
+# 3,0-8,6%) komt eenzelfde graden-waarde dus op een ANDERE fysieke opening uit
+# dan vóór de kalibratie -- de sc.servo_pos(4, ...)-aanroepen hieronder geven
+# dus een andere grijperopening dan voorheen. Geen veiligheidsrisico (de harde
+# pct_min/pct_max-klem in servo_crl.py voorkomt dat de grijper buiten
+# open/dicht kan gaan), maar de concrete hoek-waarden hieronder zijn nog niet
+# opnieuw op een zinvol resultaat gecontroleerd.
 sc = ServoController()          # alle servo’s staan meteen op hun rustposities
 # Stroomlimiet tijdens positie-aansturing:
 sc.servo_cur_limit(200)

@@ -3,12 +3,35 @@
 Alle sensor- en regelwaarden worden gesimuleerd. Het script is bedoeld voor
 MicroPython op een Pico W/Pico 2 W met ``microdot.py`` in ``/lib``.
 
-Gebruik:
+De Pico is hier zelf een WiFi-access point (``DIYCAR``) ZONDER internet-
+toegang -- dat AP geeft alleen toegang tot de Pico op ``192.168.4.1``, verder
+niks. Gebruik daarom een APARTE pc/laptop die met dat WiFi verbindt om de
+webserver te testen; de pc waarmee je de Pico via USB programmeert/opvolgt
+(Thonny/REPL) kan intussen gewoon op je eigen netwerk blijven.
+
+Gebruik (op die aparte pc/laptop):
     1. Start dit bestand op de Pico.
-    2. Verbind de pc met wifi ``DIYCAR`` (wachtwoord ``diycar12345``).
-    3. curl http://192.168.4.1/start?run_id=testrit-1
-    4. curl --fail --no-buffer http://192.168.4.1/log.csv -o testrit.csv
-    5. curl http://192.168.4.1/stop
+    2. Verbind de pc/laptop met wifi ``DIYCAR`` (wachtwoord ``diycar12345``).
+    3. Test de endpoints. Twee manieren, kies er één:
+
+       a) EENVOUDIGST -- typ de kale URL rechtstreeks in de adresbalk van de
+          browser (dus GEEN ``curl`` ervoor -- dat wordt dan als zoekopdracht
+          behandeld en mislukt zonder internet):
+              http://192.168.4.1/start?run_id=testrit-1
+              http://192.168.4.1/log.csv     (downloadt automatisch als
+                                               run.csv, dankzij Content-
+                                               Disposition; open /stop in een
+                                               NIEUW tabblad om de download
+                                               af te ronden)
+              http://192.168.4.1/stop
+
+       b) MET CURL -- alleen zinvol voor een eigen bestandsnaam of de exacte
+          streaming-/foutcodecontrole. Moet in een echt TERMINALVENSTER
+          (Konsole/PowerShell/cmd/Terminal.app), NOOIT in de adresbalk van
+          de browser:
+              curl 'http://192.168.4.1/start?run_id=testrit-1'
+              curl --fail --no-buffer http://192.168.4.1/log.csv -o testrit.csv
+              curl http://192.168.4.1/stop
 
 ``/status`` toont de actuele tellers. Een tweede gelijktijdige logclient krijgt
 HTTP 409. Stop curl met Ctrl-C om reconnectgedrag te testen; de run blijft dan
@@ -23,6 +46,7 @@ import machine
 import network
 import ubinascii
 from microdot import Microdot, Response
+print('test start')
 
 
 AP_SSID = "DIYCAR"
@@ -143,10 +167,15 @@ def log_snapshot():
 
 
 def valid_id(value):
+    # Geen str.isalnum(): die bestaat niet in MicroPython (ontbrekende
+    # CPython-methode) en gaf hier een AttributeError -> 500 Internal
+    # Server Error op elke /start-aanroep. Expliciete ASCII-rangecheck
+    # werkt op beide platformen.
     if not value or len(value) > 40:
         return False
     for char in value:
-        if not (char.isalnum() or char in "_-"):
+        if not (('0' <= char <= '9') or ('a' <= char <= 'z')
+                or ('A' <= char <= 'Z') or char in "_-"):
             return False
     return True
 

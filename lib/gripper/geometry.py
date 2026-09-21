@@ -22,7 +22,9 @@
 # vingers en is er GEEN terugkoppeling meer.
 # ================================================================
 
-GRIP_OPEN_CM  = 9.0      # kaakopening maximaal open
+GRIP_OPEN_CM  = 8.7      # kaakopening maximaal open (J10=3% PWM). Was 9.0cm
+                         # (ruwe schatting); 8,7cm is de exact gemeten waarde
+                         # (2026-09-21).
 GRIP_MIN_CM   = 2.0      # kaakopening bijna dicht
 TIP_NEAR_CM   = 12.0     # toppen t.o.v. ultrasoon bij maximaal open
 TIP_FAR_CM    = 15.0     # toppen t.o.v. ultrasoon bij bijna dicht
@@ -87,3 +89,68 @@ def lateral_tolerance_cm(object_w_cm=None):
 # 13,29 cm bij een voorwerp van 6 cm. Rond dit NIET af naar 13 cm: bij een
 # gemikte eindnauwkeurigheid van ~0,3 cm is 0,3 cm afronding de hele foutbegroting.
 STOP_DIST_CM = tip_pos_cm(OBJECT_W_CM)
+
+
+# ================================================================
+# Armkinematica (schouder J1 + elleboog J2) — hoogte/afstand van de grijper
+# ================================================================
+#
+# CAD-exact afgeleid uit FreeCAD-zijaanzicht-projecties (2026-09-21), oorsprong
+# = voorkant ultrasoon (x) / bovenkant controlbord (z, dat ligt 75mm boven de
+# grond). Gevalideerd tegen twee gemeten standen: rust (J1=J2=0°) en volledig
+# gestrekt (J1=J2=180°) — zie globale_specificatie_NL.md, sectie
+# "Armkinematica", voor de volledige herleiding.
+#
+# Assen: x = horizontaal, positief naar de lichtbron/het voorwerp toe
+# (oorsprong = voorkant ultrasoon, dus NEGATIEF = achter de ultrasoon);
+# z = hoogte boven de grond, in cm (net als de rest van deze module).
+#
+# Hoekconventie — label_j1/label_j2 zijn de 0-180 servo-graden zoals
+# servo_pos() ze aanneemt (0 = rust, 180 = max):
+#   alpha1  = label_j1                  0°=horizontaal-achter, 90°=recht
+#                                        omhoog, 180°=horizontaal-voor
+#   alpha2  = label_j1 + 90 - label_j2  onderarmhoek, zelfde conventie
+#   alpha_h = alpha2 + 90               handhoek -- vaste 90° t.o.v. de
+#                                        onderarm, de hand heeft geen eigen
+#                                        servo/vrijheidsgraad
+#
+# ARM_L3_CM (pols -> vingertop) komt NIET uit de CAD-projectie maar uit de
+# eerdere handmatige vingerafmetingen (22+41+32+30mm); die tabel had een
+# interne inconsistentie die nog niet is opgehelderd — [TE VERIFIËREN].
+
+import math
+
+SHOULDER_X_CM = -3.72     # schouderas t.o.v. voorkant ultrasoon (negatief = erachter)
+SHOULDER_Z_CM = 10.30     # schouderas, hoogte boven de grond
+ARM_L1_CM     = 7.40      # schouder -> elleboog (CAD-exact)
+ARM_L2_CM     = 3.425     # elleboog -> polsmechanisme/tandwielcentrum (CAD-exact)
+ARM_L3_CM     = 12.5      # pols -> vingertop [TE VERIFIËREN, zie hierboven]
+
+
+def _joint_xz(x0, z0, length_cm, angle_deg):
+    """Eindpunt van één schakel: x0,z0 + length_cm in richting angle_deg,
+    met de armconventie hierboven (0°=-x, 90°=+z, 180°=+x)."""
+    rad = math.radians(angle_deg)
+    return x0 - length_cm * math.cos(rad), z0 + length_cm * math.sin(rad)
+
+
+def arm_positie_cm(label_j1, label_j2):
+    """Positie (x, z) van elleboog, pols en vingertop bij gegeven J1/J2-hoeken
+    (0-180 graden, zoals servo_pos() ze aanneemt).
+
+    Retourneert ((x_elleboog, z_elleboog), (x_pols, z_pols), (x_vingertop, z_vingertop)),
+    in cm t.o.v. de ultrasoon (x) en de grond (z).
+    """
+    alpha1 = label_j1
+    alpha2 = label_j1 + 90.0 - label_j2
+    alpha_h = alpha2 + 90.0
+
+    x1, z1 = _joint_xz(SHOULDER_X_CM, SHOULDER_Z_CM, ARM_L1_CM, alpha1)
+    x2, z2 = _joint_xz(x1, z1, ARM_L2_CM, alpha2)
+    x3, z3 = _joint_xz(x2, z2, ARM_L3_CM, alpha_h)
+    return (x1, z1), (x2, z2), (x3, z3)
+
+
+def vingertop_cm(label_j1, label_j2):
+    """Kortweg: (x, z) van de vingertop bij gegeven J1/J2-hoeken (graden)."""
+    return arm_positie_cm(label_j1, label_j2)[2]

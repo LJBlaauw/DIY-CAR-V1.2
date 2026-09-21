@@ -2,9 +2,13 @@
 # RP2350 MicroPython
 # - Servos: 1 (GPIO2), 2 (GPIO3), 3 (GPIO4), 4 (GPIO22)
 # - Laser-PWM op GPIO15 via BS170 MOSFET
-# - PWM-tick via GPIO5 (INPUT, FALLING), fysiek verbinden met PWM van servo1 (GPIO2)
-# - Mapping servo: 0° -> 2.5% duty, 180° -> 12.5% duty
-# - Per-servo rustposities in duty-% (servo1: 4.1%, servo2: 3.6%, servo4: 2.0%)
+# - PWM-tick via GPIO5 (INPUT, RISING), fysiek verbinden met PWM van servo1 (GPIO2)
+# - Mapping servo: PER SERVO 0° -> pct_min[nr] duty, 180° -> pct_max[nr] duty
+#   (handmatig gekalibreerd, zie CONFIG_PATH hieronder en globale_specificatie_NL.md)
+# - Per-servo rustposities in duty-% staan in `rest_pct`; initieel gelijk aan
+#   pct_min (dus rust = 0°), maar los aanpasbaar via set_rest_pct() zonder de
+#   onderliggende graden<->duty-mapping (en dus de HUIDIGE fysieke positie) te
+#   verstoren.
 # - Bij __init__ direct alle servo's naar hun rustpositie
 # - servo_pos() is RELATIEF t.o.v. rust en nooit onder rust
 # - Servo4: stroom-SETPOINT (PI) én stroom-LIMIT; stroommeting op ADC2 (GPIO28) + EMA filter
@@ -15,9 +19,50 @@
 #   * Laser via low-side MOSFET (GPIO15 -> gate, 100R in serie). Laser en Pico GND gemeenschappelijk.
 #   * Laser-PWM deelt slice met servo's: frequentie altijd 50 Hz (set_laser_freq() is no-op).
 #
+# WAAROM RISING EN NIET FALLING
+# ------------------------------
+# De PWM-hardware zet de uitgang hoog bij de teller-wrap (periodegrens) en
+# laag zodra de teller de duty-waarde passeert. De RISING edge ligt dus altijd
+# exact op de vaste 20 ms-periodegrens, ONGEACHT de gecommandeerde hoek; de
+# FALLING edge (het pulseinde) verschuift met de duty cycle, dus met de
+# servohoek. Voor iets dat op een vaste fase t.o.v. een 50Hz-klok moet
+# triggeren (zie attach_tick_callback() hieronder, gebruikt door
+# lib/LDR/ldr_scan_isr.py om op een vaste fase t.o.v. de 100Hz-netrimpel te
+# samplen) is de rising edge daarom de enige bruikbare keuze. Verandert niets
+# aan de servo-timing zelf: update_all() rekent met een vaste _dt = 20 ms, niet
+# met de werkelijke flanktijd.
+#
 from machine import Pin, PWM, ADC
 import micropython
 import time
+
+# --- Handmatige kalibratie (2026-09-19) ---
+# rest_pct = duty% bij 0 graden ("thuis"); max_pct = duty% bij 180 graden
+# (gemeten uiterste van de slag). Servo4 is de grijper: rest_pct = maximaal
+# open (ook de rustpositie), max_pct = maximaal dicht. HORIZONTAL_PCT is een
+# extra, losse referentiepositie voor servo1 (arm horizontaal gestrekt) - zit
+# NIET in de graden-mapping, puur ter documentatie/toekomstig gebruik.
+#
+# Bron: config.json ("servo"-sectie), met deze waarden als fallback als dat
+# bestand ontbreekt of niet leesbaar is (zie te_doen_NL.md, kalibratiesessie).
+CONFIG_PATH = "config.json"
+DEFAULT_REST_PCT = {1: 3.08, 2: 2.6, 4: 3.0}
+DEFAULT_MAX_PCT  = {1: 13.0, 2: 13.0, 4: 8.6}
+DEFAULT_HORIZONTAL_PCT = {1: 12.5}
+
+
+def _load_servo_config():
+    """Lees de "servo"-sectie uit config.json. Geeft {} terug (-> defaults
+    hierboven) als het bestand ontbreekt, corrupt is, of geen servo-sectie
+    heeft; dit mag nooit een crash bij het opstarten veroorzaken."""
+    try:
+        import json
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+        return cfg.get("servo", {})
+    except Exception:
+        return {}
+
 
 class ServoController:
     def __init__(self, irq_gpio=5):
@@ -28,19 +73,28 @@ class ServoController:
         self.pwm_freq = 50           # 50 Hz
         self._dt = 0.020             # 20 ms per tick (aanname bij PWM flank)
         self.min_deg, self.max_deg = 0.0, 180.0
-
-        # Duty (%) mapping: 0°->2.5%, 180°->12.5%
-        self._pct_min = 2.5
-        self._pct_max = 12.5
-        self._pct_span = self._pct_max - self._pct_min  # 10.0%
         self._u16_per_pct = 65535.0 / 100.0
 
-        # --- Per-servo rustposities (% duty) ---
-        self.rest_pct = {
-            1: 4.1,  # onderste scharnier
-            2: 3.6,
-            4: 2.0,  # grijper
-        }
+        # --- Duty (%) mapping, PER SERVO: 0°->pct_min[nr], 180°->pct_max[nr] ---
+        # pct_min/pct_max zijn de STABIELE kalibratiegrenzen (hardware-uiterste
+        # van de slag); ze veranderen NIET via set_rest_pct(). Zou dat wel zo
+        # zijn, dan verschuift de graden<->duty-mapping onder een servo die op
+        # dat moment ergens anders dan rust staat, en maakt update_all() bij de
+        # eerstvolgende tick een ongewilde fysieke sprong met dezelfde
+        # opgeslagen pos_deg. rest_pct is daarom een BEWUST aparte, wel vrij
+        # aanpasbare dict (begint gelijk aan pct_min, dus rust = 0°).
+        _cfg = _load_servo_config()
+        self.pct_min = {}
+        self.pct_max = {}
+        self.horizontal_pct = dict(DEFAULT_HORIZONTAL_PCT)
+        self.rest_pct = {}
+        for nr in (1, 2, 4):
+            entry = _cfg.get(str(nr), {})
+            self.pct_min[nr] = float(entry.get("rest_pct", DEFAULT_REST_PCT[nr]))
+            self.pct_max[nr] = float(entry.get("max_pct", DEFAULT_MAX_PCT[nr]))
+            self.rest_pct[nr] = self.pct_min[nr]
+            if "horizontal_pct" in entry:
+                self.horizontal_pct[nr] = float(entry["horizontal_pct"])
 
         # --- Servo4: stroommeting (ADC2 = GPIO28) ---
         self.adc_servo4 = ADC(2)
@@ -72,8 +126,8 @@ class ServoController:
             pwm = PWM(Pin(gpio, Pin.OUT))
             pwm.freq(self.pwm_freq)
 
-            rest_pct = self.rest_pct.get(nr, 4.1)
-            rest_deg = self._pct_to_deg(rest_pct)
+            rest_pct = self.rest_pct[nr]
+            rest_deg = self._pct_to_deg(nr, rest_pct)
 
             state = {
                 "pwm": pwm,
@@ -84,7 +138,7 @@ class ServoController:
                 "cur_limit": None,       # LIMIT-modus (mA)
             }
             self.servos[nr] = state
-            pwm.duty_u16(self._pct_to_u16(rest_pct))  # direct naar rust
+            pwm.duty_u16(self._pct_to_u16(nr, rest_pct))  # direct naar rust
 
         # --- Laser PWM op GPIO4 (deelt slice met servo's) ---
         self.laser_pin = 15
@@ -93,8 +147,26 @@ class ServoController:
         self.laser_power(0.0)               # start uit
 
         # --- Tick via externe PWM op GPIO7 (input) ---
+        self._tick_cb = None    # optionele externe hard-IRQ-callback, zie attach_tick_callback()
         self._irq_pin = Pin(int(irq_gpio), Pin.IN, Pin.PULL_DOWN)
-        self._irq_pin.irq(trigger=Pin.IRQ_FALLING, handler=self._pwm_irq)
+        self._irq_pin.irq(trigger=Pin.IRQ_RISING, handler=self._pwm_irq)
+
+    # ---------- Publieke API: tick-callback (voor externe fase-gesynchroniseerde sampling) ----------
+    def attach_tick_callback(self, fn):
+        """Registreer een functie die VANUIT DE HARDE PWM-IRQ wordt aangeroepen,
+        op elke rising edge van servo1's 50Hz-PWM (dus op een vaste fase t.o.v.
+        de 100Hz-netrimpel, zie de uitleg bovenaan dit bestand).
+
+        `fn` draait in hard-IRQ-context: geen allocaties, geen blokkerende
+        calls (sleep, print, file-io), en mag geen exception laten ontsnappen
+        (die wordt hier stilzwijgend geslikt om de servo-update niet te
+        breken). Bedoeld voor bv. lib/LDR/ldr_scan_isr.py's `_sync_tick()` via
+        `start_synced_sampling()` — geen ADC/percentage-kennis hier, dat blijft
+        in de LDR-module.
+
+        `fn=None` ontkoppelt weer.
+        """
+        self._tick_cb = fn if callable(fn) else None
 
     # ---------- Publieke API: Servo ----------
     def servo_pos(self, nr, graden, graden_per_sec=60.0):
@@ -103,7 +175,7 @@ class ServoController:
         Voorbeeld: servo_pos(1, 30) -> ga naar (rust_1 + 30°).
         """
         s = self.servos[nr]
-        rest_deg = self._pct_to_deg(self.rest_pct.get(nr, 4.1))
+        rest_deg = self._pct_to_deg(nr, self.rest_pct[nr])
         rel = float(graden)
         if rel < 0:
             rel = 0.0
@@ -133,9 +205,12 @@ class ServoController:
                     time.sleep_ms(10)
 
     def set_rest_pct(self, nr, pct):
-        """Stel rustpositie (in % duty) per servo in (2.5..12.5%)."""
-        pct = self._clamp_pct(pct)
-        self.rest_pct[nr] = pct
+        """Stel rustpositie (in % duty) per servo in, geklemd tussen
+        pct_min[nr] en pct_max[nr] (de kalibratiegrenzen van díe servo).
+        Verandert alleen waar "rust" naartoe wijst, NIET de graden<->duty-
+        mapping zelf -- de huidige fysieke positie van de servo blijft dus
+        ongemoeid totdat er expliciet naar rust bewogen wordt."""
+        self.rest_pct[nr] = self._clamp_pct(nr, pct)
 
     # SETPOINT-modus (exclusief met LIMIT)
     def servo_cur(self, mA, graden_per_sec=60.0):
@@ -213,6 +288,16 @@ class ServoController:
 
     # ---------- IRQ → scheduled update ----------
     def _pwm_irq(self, pin):
+        # Eerst de externe tick-callback (bv. LDR-sampling), VOORDAT we iets
+        # schedulen: micropython.schedule() zelf kost al een beetje tijd, en
+        # het hele nut van deze callback is dat hij zo dicht mogelijk op de
+        # fysieke rising edge zit (vaste fase t.o.v. de 100Hz-netrimpel).
+        cb = self._tick_cb
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
         try:
             micropython.schedule(self._scheduled_update, 0)
         except Exception:
@@ -268,32 +353,38 @@ class ServoController:
                 new_pos = pos
 
             s["pos_deg"] = new_pos
-            s["pwm"].duty_u16(self._pct_to_u16(self._deg_to_pct(new_pos)))
+            s["pwm"].duty_u16(self._pct_to_u16(nr, self._deg_to_pct(nr, new_pos)))
 
     # ---------- Helpers ----------
+    # pct_min/pct_max hieronder zijn PER SERVO (zie __init__): elke servo heeft
+    # zijn eigen gekalibreerde duty-bereik, dus elke helper die met % rekent
+    # heeft `nr` nodig om te weten welk bereik van toepassing is.
     def _clamp_deg(self, d):
         return self.min_deg if d < self.min_deg else self.max_deg if d > self.max_deg else d
 
-    def _clamp_pct(self, p):
-        if p < self._pct_min:  return self._pct_min
-        if p > self._pct_max:  return self._pct_max
+    def _clamp_pct(self, nr, p):
+        lo, hi = self.pct_min[nr], self.pct_max[nr]
+        if p < lo: return lo
+        if p > hi: return hi
         return p
 
-    def _deg_to_pct(self, deg):
+    def _deg_to_pct(self, nr, deg):
         deg = self._clamp_deg(deg)
-        pct = self._pct_min + (deg / 180.0) * self._pct_span
-        return self._clamp_pct(pct)
+        lo, hi = self.pct_min[nr], self.pct_max[nr]
+        pct = lo + (deg / 180.0) * (hi - lo)
+        return self._clamp_pct(nr, pct)
 
-    def _pct_to_deg(self, pct):
-        pct = self._clamp_pct(pct)
-        return 180.0 * ((pct - self._pct_min) / self._pct_span)
+    def _pct_to_deg(self, nr, pct):
+        pct = self._clamp_pct(nr, pct)
+        lo, hi = self.pct_min[nr], self.pct_max[nr]
+        return 180.0 * ((pct - lo) / (hi - lo))
 
-    def _pct_to_u16(self, pct):
-        return int(self._clamp_pct(pct) * self._u16_per_pct)
+    def _pct_to_u16(self, nr, pct):
+        return int(self._clamp_pct(nr, pct) * self._u16_per_pct)
 
     def _set_rest_target(self, nr, speed_deg_s):
         s = self.servos[nr]
-        rest_deg = self._pct_to_deg(self.rest_pct.get(nr, 4.1))
+        rest_deg = self._pct_to_deg(nr, self.rest_pct[nr])
         s["target_deg"] = self._clamp_deg(rest_deg)
         s["speed"] = float(speed_deg_s)
 

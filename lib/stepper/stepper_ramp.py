@@ -175,7 +175,12 @@ STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # ~159 stappen ve
 
 RAD_TO_DEG    = 57.29577951308232
 
-# Snelheidsgrenzen (motor 17HS8401, TMC2209 stealthChop, VREF 1 V = 0,71 A RMS)
+# Snelheidsgrenzen (motor 17HS8401, TMC2209 stealthChop, VREF 1,5 V = ca. 1,07 A RMS
+# sinds 2026-09-19, was 1 V/0,71 A; zie globale_specificatie_NL.md). De hogere
+# VREF + de motor nu ook echt op 24 V i.p.v. 12V-bankproeven geeft elektrisch
+# marge voor een snelheidsverdubbeling, maar V_MAX_CM_S hieronder is BEWUST
+# nog niet aangepast -- wacht op hardwarevalidatie van max. startsnelheid/
+# versnelling (zie "Nog te verifiëren op hardware" in globale_specificatie_NL.md).
 V_MAX_CM_S    = 19.1         # 1,0 omw/s — stealthChop haalt ~300 rpm, we zitten op 60
 V_START_CM_S  = 1.91         # 0,1 omw/s — veilige startsnelheid, empirisch te verifieren
 ACCEL_CM_S2   = 55.0         # bepaalt de ramp-AFSTAND via (v1^2-v0^2)/(2a) = 3,28 cm.

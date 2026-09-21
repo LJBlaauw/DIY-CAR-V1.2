@@ -109,6 +109,16 @@ def _stepper_pos_fallback():
 
 _stepper_pos = _stepper_pos_fallback
 
+# --- Fase-gesynchroniseerde achtergrond-sampling (zie start_synced_sampling) ---
+SYNC_BURST_N   = 8            # samples per servo-PWM-tick (20 ms), back-to-back
+_sync_buf_a    = [0.0, 0.0]   # ping-pong: laatst-klare gemiddelde adc_u16 per buffer
+_sync_buf_b    = [0.0, 0.0]
+_sync_ready    = 0            # index van de buffer die klaar is om te LEZEN
+_sync_acc_a    = 0
+_sync_acc_b    = 0
+_sync_n        = 0
+_sync_active   = False
+
 # =========================
 #  HW INIT
 # =========================
@@ -259,6 +269,85 @@ def measure_now(n=10, interval_ms=1):
     adc_b = acc_b // n
     ra = _adc_to_res_ohm(adc_a)
     rb = _adc_to_res_ohm(adc_b)
+    pa = round(_res_to_percent_log(ra, LDR_GAIN_A), 1)
+    pb = round(_res_to_percent_log(rb, LDR_GAIN_B), 1)
+    return (pa, pb)
+
+# =========================
+#  FASE-GESYNCHRONISEERDE ACHTERGROND-SAMPLING (servo-PWM-tick)
+# =========================
+#
+# Alternatief voor measure_now(): i.p.v. blokkerend 10 samples over 10 ms uit
+# te middelen om de 100Hz-netrimpel WEG te middelen, wordt hier bewust altijd
+# op DEZELFDE fase t.o.v. die rimpel gesampled — getriggerd door de rising
+# edge van servo1's 50Hz-PWM (zie lib/servo/servo_crl.py, GPIO2->GPIO5). Dat
+# geeft geen ruis meer (de fase ligt vast), maar wel een STATISCHE bias ter
+# grootte van de rimpelwaarde op die fase. Voor een differentieel gebruik
+# (A-B, of Q-verschil over een rit) valt die bias grotendeels weg omdat beide
+# kanalen in dezelfde IRQ-call, op vrijwel hetzelfde moment, dezelfde bias
+# zien. Voor een absolute meting verdwijnt de bias in de gefitte constanten
+# (GAMMA, LDR_GAIN_B).
+#
+# LET OP: de servo-PWM-klok (RP2350) en het 230V-net lopen op onafhankelijke
+# oscillators, dus de fase driftlangzaam weg (orde seconden-tot-minuten voor
+# een volledige cyclus). "Statisch" geldt dus op de tijdschaal van één meting
+# of één rijsegment, niet voor iets dat minutenlang loopt.
+#
+# _sync_tick() draait IN DE HARDE PWM-IRQ van ServoController (zie
+# attach_tick_callback in servo_crl.py): geen allocaties, geen sleep, geen
+# exception op het normale pad. De SYNC_BURST_N samples per tick zijn back-
+# to-back (geen 1 ms-spacing zoals measure_now) en middelen alleen ADC-/
+# thermische ruis uit, niet de netrimpel — dat is hier al opgelost door de
+# vaste fase.
+#
+# Slaat over tijdens een actieve scan() (_mode == "scan"): scan() heeft zijn
+# eigen ISR (_on_pio_irq) op dezelfde _adc_a/_adc_b, en twee IRQ's die
+# tegelijk een ADC-kanaal omschakelen kan de mux van elkaar laten conflicteren.
+
+def _sync_tick():
+    """Aan te roepen vanuit ServoController._pwm_irq via attach_tick_callback.
+    Puur mechanisch: ADC-burst + optellen, wisselt de ping-pong-buffer om de
+    SYNC_BURST_N samples. Doet GEEN %-omrekening (te duur voor een hard-IRQ)."""
+    global _sync_acc_a, _sync_acc_b, _sync_n, _sync_ready
+    if _mode == "scan" or _adc_a is None:
+        return
+    _sync_acc_a += _adc_a.read_u16()
+    _sync_acc_b += _adc_b.read_u16()
+    _sync_n += 1
+    if _sync_n >= SYNC_BURST_N:
+        w = 1 - _sync_ready
+        _sync_buf_a[w] = _sync_acc_a / _sync_n
+        _sync_buf_b[w] = _sync_acc_b / _sync_n
+        _sync_ready = w
+        _sync_acc_a = 0
+        _sync_acc_b = 0
+        _sync_n = 0
+
+def start_synced_sampling(servo_controller):
+    """Koppel de LDR-sampling aan de 50Hz-servo-PWM-tick van `servo_controller`
+    (een lib.servo.servo_crl.ServoController). Vereist dat GPIO2 fysiek naar
+    GPIO5 is verbonden (zie hardware/gpio_pinout.md). Na deze aanroep geeft
+    read_synced() een doorlopend ververste waarde (max ~20 ms oud, één
+    servo-PWM-frame) zonder dat de aanroeper hoeft te blokkeren."""
+    global _sync_active
+    _init_hw()
+    servo_controller.attach_tick_callback(_sync_tick)
+    _sync_active = True
+
+def stop_synced_sampling(servo_controller):
+    """Ontkoppel weer; read_synced() geeft daarna de laatst gemeten waarde."""
+    global _sync_active
+    servo_controller.attach_tick_callback(None)
+    _sync_active = False
+
+def read_synced():
+    """Laatste klare, fase-gesynchroniseerde LDR-waarde (%, tuple A/B).
+
+    Niet-blokkerend: leest alleen de al-klare ping-pong-buffer. Vereist een
+    voorafgaande start_synced_sampling(); zonder actieve tick-bron geeft dit
+    de laatst berekende waarde (of (0.0, 0.0) als er nog nooit gesampled is)."""
+    ra = _adc_to_res_ohm(int(_sync_buf_a[_sync_ready]))
+    rb = _adc_to_res_ohm(int(_sync_buf_b[_sync_ready]))
     pa = round(_res_to_percent_log(ra, LDR_GAIN_A), 1)
     pb = round(_res_to_percent_log(rb, LDR_GAIN_B), 1)
     return (pa, pb)

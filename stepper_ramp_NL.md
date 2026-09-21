@@ -10,7 +10,7 @@ Stap-voor-stap uitleg van [`lib/stepper/stepper_ramp.py`](lib/stepper/stepper_ra
 
 De oude module commandeert een snelheid in één keer. Vanuit stilstand betekent dat: de rotor moet binnen één microstap van 78 µs naar de eindsnelheid springen. Dat is een oneindige versnelling — de rotor kan het roterende veld niet volgen, verliest synchronisme, en de motor blijft zoemend staan.
 
-Het is dus **geen koppelprobleem**. De koppelbegroting laat een factor 8 marge zien bij VREF = 1,0 V:
+Het is dus **geen koppelprobleem**. De koppelbegroting laat ruime marge zien, bij VREF = 1,0 V al een factor 8, en bij de sinds 2026-09-19 verhoogde VREF = 1,5 V (motor draait nu ook echt op de volle 24 V i.p.v. eerdere 12V-bankproeven) een factor ~12,5:
 
 | Post | Koppel per wiel |
 |---|---|
@@ -18,9 +18,9 @@ Het is dus **geen koppelprobleem**. De koppelbegroting laat een factor 8 marge z
 | Rotor-inertie (68 g·cm²) | 0,013 N·cm |
 | Rolweerstand (ruim geschat) | ~1,2 N·cm |
 | **Totaal nodig** | **~2,7 N·cm** |
-| **Beschikbaar** | **~22 N·cm** |
+| **Beschikbaar bij VREF 1,5 V** | **~32,6 N·cm** (was ~22 N·cm bij 1,0 V) |
 
-Bij 22 N·cm en wielradius 3,04 cm is de trekkracht 14,5 N tegen een gewicht van 16,1 N: **de wielen slippen eerder dan dat de motor koppel tekortkomt.** Meer stroom of spreadCycle helpt dus niet — een ramp wel.
+Bij 32,6 N·cm en wielradius 3,04 cm is de trekkracht ~21,4 N tegen een gewicht van 16,1 N: **de wielen slippen eerder dan dat de motor koppel tekortkomt** (dat gold al bij 1,0 V, en nog sterker bij 1,5 V). Meer stroom of spreadCycle helpt dus niet — een ramp wel.
 
 De eis erbij: het oude concept liep 100 % in de PIO zonder CPU-overhead. Dat willen we behouden.
 
