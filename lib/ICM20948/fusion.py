@@ -1,5 +1,8 @@
 """
-fusion.py - Sensor fusion voor MPU9250 (accelerometer + gyro + magnetometer).
+fusion.py - Sensor fusion voor de ICM-20948 (accelerometer + gyro + magnetometer).
+
+Verwacht dat de magnetometerassen al zijn uitgelijnd op die van de
+accelerometer/gyro (dat doet icm20948.AK09916 standaard, align=True).
 
 Complementair filter met kantelcompensatie:
 - roll/pitch: fusie van accelerometer (stabiel op lange termijn) en

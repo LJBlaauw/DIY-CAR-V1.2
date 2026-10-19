@@ -1,12 +1,11 @@
 import machine
 import time
 import math
-from mpu9250 import MPU9250
-from ak8963 import AK8963
+from icm20948 import ICM20948
 from ssd1306 import SSD1306_I2C
 
-# --- Testscript: GY9250 basic (complementair filter) met live weergave op OLED ---
-# GY9250 (MPU9250): GPIO10 (SDA1) / GPIO11 (SCL1) -> I2C-bus 1
+# --- Testscript: ICM-20948 basic (complementair filter) met live weergave op OLED ---
+# ICM-20948:        GPIO10 (SDA1) / GPIO11 (SCL1) -> I2C-bus 1
 # OLED (SSD1306):   GPIO0  (SDA0) / GPIO1  (SCL0) -> I2C-bus 0
 
 i2c_sensor = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
@@ -14,13 +13,11 @@ i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0), freq=400000)
 
 oled = SSD1306_I2C(128, 64, i2c_oled)
 
-dummy = MPU9250(i2c_sensor)  # opent de I2C-bypass naar de AK8963
-ak8963 = AK8963(
+sensor = ICM20948(
     i2c_sensor,
-    offset=(-24.5, 12.3, -5.1),      # VUL HIER UW KALIBRATIEWAARDEN IN (zie test_gy9250_calibrate.py)
-    scale=(0.95, 1.02, 1.03),
+    mag_offset=(-24.5, 12.3, -5.1),  # VUL HIER UW KALIBRATIEWAARDEN IN (zie test_icm20948_calibrate.py)
+    mag_scale=(0.95, 1.02, 1.03),
 )
-sensor = MPU9250(i2c_sensor, ak8963=ak8963)
 
 
 def toon(regels):
@@ -33,8 +30,8 @@ def toon(regels):
 gefilterde_hoek = 0.0
 dt = 0.02  # 50 Hz
 
-toon(["GY9250 basic test", "Sensor gevonden", "start over 2s..."])
-print("GY9250 basic test: sensor gevonden, whoami=" + hex(sensor.whoami))
+toon(["ICM20948 basic", "Sensor gevonden", "start over 2s..."])
+print("ICM-20948 basic test: sensor gevonden, whoami=" + hex(sensor.whoami))
 time.sleep(2)
 
 print("Test gestart. Ctrl-C om te stoppen.")
@@ -54,7 +51,7 @@ try:
         gefilterde_hoek %= 360.0
 
         toon([
-            "GY9250 BASIC",
+            "ICM20948 BASIC",
             f"Heading:{gefilterde_hoek:6.1f}",
             f"Ax{ax:5.2f} Ay{ay:5.2f}",
             f"Az{az:5.2f}",
@@ -72,5 +69,5 @@ try:
 
         time.sleep_ms(int(dt * 1000))
 except KeyboardInterrupt:
-    toon(["GY9250 basic test", "Gestopt."])
+    toon(["ICM20948 basic", "Gestopt."])
     print("Test gestopt.")

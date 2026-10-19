@@ -23,7 +23,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 4. **Grijpen** — Bestuur twee scharnier-servo's zodat de arm het voorwerp bereikt.
 5. **Sluiten grijper** — Servo 4 met stroombeperking (PI-limiter) zodat de servo niet overbelast raakt.
 6. **Terugkeren** — Omdraaien en via opgeslagen wielodometrie/trajectinformatie terug naar de startpositie; voorwerp neerzetten. De nauwkeurigheid hiervan wordt begrensd door cumulatieve odometriefout en wielslip.
-7. **GY9250-ondersteuning** — gyro en magnetometer kunnen de oriëntatie/koers ondersteunen. Ze leveren geen absolute X/Y-positie. Software is aanwezig; hardwarevalidatie (2026-09-19) laat zien dat het **huidige bordje geen magnetometer heeft** (kale MPU-6500, whoami 0x70 i.p.v. 0x71 — zie *Bekende issues/TODO*). Gyro en accelerometer werken wél en zijn al in gebruik voor koerscorrectie tijdens het rijden (zie `stepper_ramp.py`, cascade LDR+gyro); alleen de magnetometer-afhankelijke functies (absoluut kompas voor de terugweg, `GY9250_basic.py`/`GY9250_fusion.py`, de kalibratiescripts) wachten op vervangende hardware.
+7. **IMU-ondersteuning (ICM-20948)** — gyro en magnetometer kunnen de oriëntatie/koers ondersteunen. Ze leveren geen absolute X/Y-positie. Het oorspronkelijke "GY-9250"-bordje bleek bij hardwarevalidatie (2026-09-19) een kale MPU-6500 zonder magnetometer (zie *Bekende issues/TODO*). Als vervanger is een **ICM-20948** besteld: opvolger van de MPU-9250, met de AK09916-magnetometer in dezelfde behuizing. Driver en scripts staan in `lib/ICM20948/` (`icm20948.py`, `ICM20948_basic.py`, `ICM20948_fusion.py`, kalibratiescripts); validatie op hardware volgt na levering. Tot dan draait de koerscorrectie (`stepper_ramp.py`, cascade LDR+gyro) nog op het MPU-6500-bordje met de oude driver in `lib/GY9250/`.
 
 ---
 
@@ -36,11 +36,10 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | Servomotor (grijper) | 1 | MG996R | GPIO22 — met stroomsensor |
 | Servomotor (optioneel/reserve) | 1 | MG996R | GPIO4 — bedraad op PCB, nog niet aangesloten/geïmplementeerd |
 | Ultrasoonsensor | 1 | RCWL-1601 | GPIO19 (Echo), GPIO20 (Trig) |
-| LDR | 2 | 10 kΩ spanningsdeler (pull-up naar 3V3) | GPIO26, GPIO27 |
+| LDR | 2 | 4,7 kΩ spanningsdeler (pull-up naar 3V3) | GPIO26, GPIO27 |
 | Laser (kruishaar) | 1 | — | GPIO15 via MOSFET |intesity: PWM |
 | OLED | 1 | SSD1306 | I2C0: SDA=GPIO0, SCL=GPIO1 |Oled 126x64 pixels 0.96 inch |
-| Gyroscoop/accelerometer | 1 | MPU-6500 (whoami 0x70) | I2C1: SDA=GPIO10, SCL=GPIO11 — werkt, in gebruik voor koerscorrectie (`stepper_ramp.py`) |
-| Magnetometer/kompas | 0 | **ontbreekt** — huidig bordje is geen echte GY-9250/MPU-9250 | **[BLOKKEREND, HARDWARE]** AK8963 niet op de I2C-bus gevonden (zie `tests/test_gy9250_i2c_scan.py` en *Bekende issues/TODO*); vervangend bordje besteld |
+| Gyroscoop/accelerometer/magnetometer | 1 | **ICM-20948** (besteld; vervangt het MPU-6500-bordje) | I2C1: SDA=GPIO10, SCL=GPIO11. Adres 0x69 (AD0 hoog) of 0x68 (AD0 laag), driver zoekt zelf; magnetometer AK09916 op 0x0C via I2C-bypass. Driver `lib/ICM20948/icm20948.py`; controle bij levering met `tests/test_icm20948_i2c_scan.py` (verwacht WHO_AM_I `0xEA`, AK09916 `0x48`/`0x09`) |
 | Stroomsensor grijper | — | 0,1 Ω shunt + opamp (gain 14×) | ADC2 = GPIO28 |
 | LED | 1 | WS2812B | GPIO6 |type:multicoler 1 wire |
 | WiFi/Bluetooth | 1 | Infineon CYW43439 (onboard Pico 2 W) | interne boardverbinding |
@@ -82,7 +81,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | totale lengte CAR | ultrasoon | achterkant batterij | 230mm | horizontaal |
 | zwenkwiel | wiel | zwenkwiel | 155mm | horizontaal |
 
-De robotcontroller is een **Raspberry Pi Pico 2 W** met een **RP2350** microcontroller en een onboard **Infineon CYW43439** wireless controller. In MicroPython wordt deze via de CYW43-driver aangestuurd. De webserver/websocket-besturing gebruikt WiFi; de geplande softwarearchitectuur houdt netwerk- en hoofdcontroltaken op core 0 en reserveert core 1 voor GY9250/displaytaken. Deze coreverdeling moet nog als geheel op hardware worden gevalideerd.
+De robotcontroller is een **Raspberry Pi Pico 2 W** met een **RP2350** microcontroller en een onboard **Infineon CYW43439** wireless controller. In MicroPython wordt deze via de CYW43-driver aangestuurd. De webserver/websocket-besturing gebruikt WiFi; de geplande softwarearchitectuur houdt netwerk- en hoofdcontroltaken op core 0 en reserveert core 1 voor ICM-20948/displaytaken. Deze coreverdeling moet nog als geheel op hardware worden gevalideerd.
 
 Zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md) voor de volledige GPIO-tabel en verificatiestatus.
 
@@ -275,7 +274,7 @@ De teller-SM's tellen **STEP-flanken** en weten niets van de richting. Een ruwe 
 | `distance()` | `(travel_A + travel_B) / 2 × CM_PER_STEP` — een rotatie geeft ~0 cm, achteruit telt negatief |
 | `heading()` | `(travel_A − travel_B) / STEPS_PER_DEG` — werkt ook bij een rotatie op de plaats |
 
-> **Let op:** de tellers tellen STEP-pulsen/commando's, geen gegarandeerde fysieke wielverplaatsing. Bij slip of een gemiste motorstap kan de odometrie dus afwijken. De GY9250 levert een onafhankelijke meting van draaisnelheid en oriëntatie, maar geen absolute lineaire X/Y-positie; lineaire slip van beide wielen vraagt een externe positiereferentie om rechtstreeks te detecteren.
+> **Let op:** de tellers tellen STEP-pulsen/commando's, geen gegarandeerde fysieke wielverplaatsing. Bij slip of een gemiste motorstap kan de odometrie dus afwijken. De ICM-20948 levert een onafhankelijke meting van draaisnelheid en oriëntatie, maar geen absolute lineaire X/Y-positie; lineaire slip van beide wielen vraagt een externe positiereferentie om rechtstreeks te detecteren.
 
 #### Koerscorrectie — cascade LDR + gyro
 
@@ -284,13 +283,13 @@ Koersverandering komt van een **verschil in stappenaantal** tussen de wielen. Bi
 | Lus | Sensor | Frequentie | Rol |
 |---|---|---|---|
 | Buiten | LDR A/B-verschil | enkele Hz (1× per 5 slices) | bepaalt **waar** we heen moeten; A ≈ B = recht op de bron. Levert het setpoint voor de draaisnelheid |
-| Binnen | GY9250 gyro-Z | elke slice (~50 Hz) | onderdrukt **storingen**: hobbels, gleuven, ongelijke vloer, wielslip. Regelt het verschil tussen gewenste en gemeten draaisnelheid weg |
+| Binnen | ICM-20948 gyro-Z | elke slice (~50 Hz) | onderdrukt **storingen**: hobbels, gleuven, ongelijke vloer, wielslip. Regelt het verschil tussen gewenste en gemeten draaisnelheid weg |
 
 Dit is **geen dubbele besturing**: de LDR bepaalt de richting, de gyro alleen de storingsonderdrukking.
 
 Let op wat de binnenlus wél en niet doet. Hij regelt het verschil tussen gewenste en gemeten **draaisnelheid** weg, dus hij dempt een verstoring *zolang die plaatsvindt*. Hij integreert geen hoekfout, dus de verdraaiing die er onderaan de streep uit komt wordt daarna niet teruggedraaid; de LDR-buitenlus doet dat. Zonder LDR (`damp_yaw_rate()`) is er dus **geen koershouden** — alleen demping, met bovendien blijvende drift door gyrobias. Bij een kortdurend afgedekte lichtbron blijft de kar daarom ongeveer rechtdoor gaan, maar hij komt niet op de oude koers terug.
 
-De **magnetometer/kompas** wordt tijdens het rijden expres níet gebruikt — de stappenmotoren verstoren het veld (zie de GY9250-stappenmotorkalibratie). Het kompas is voor de terugweg, waar een absolute koers nodig is.
+De **magnetometer/kompas** wordt tijdens het rijden expres níet gebruikt — de stappenmotoren verstoren het veld (zie de ICM-20948-stappenmotorkalibratie). Het kompas is voor de terugweg, waar een absolute koers nodig is.
 
 De **acceleratiemeter** wordt níet voor slipdetectie gebruikt. Dat idee — "stappen zonder versnelling betekent slip" — werkt niet: bij constante snelheid is de voorwaartse versnelling per definitie nul, dus normaal rijden en volledig doorslippen zien er identiek uit.
 
@@ -320,7 +319,7 @@ Als globale **snelheids-override** (alles langzamer, bv. bij een obstakel) blijf
 | `Move.service()` | Vul de FIFO's bij en pas de correctie toe. ≥1× per 10 ms aanroepen. `False` = klaar |
 | `Move.finish()` | Breek de beweging af en rem netjes af — ook tijdens de opramp, waar eerst de lopende DMA transactioneel wordt gewist en daarna vanaf de wérkelijke snelheid wordt afgeremd |
 | `HeadingController(ldr_diff, gyro_rate)` | Cascade-koersregelaar. Geef de **controller zelf** mee aan `correction=`: dan zet `Move()` zijn stuurgezag op de werkelijke rijsnelheid en krijgt hij terugkoppeling over wat er is weggeschreven |
-| `gyro_z_deg_s(sensor, sign=None)` | **Vereist** rond de GY9250: de driver levert radialen/s, de regelaar rekent in graden/s. Past `GYRO_Z_SIGN` toe |
+| `gyro_z_deg_s(sensor, sign=None)` | **Vereist** rond de ICM-20948: de driver levert radialen/s, de regelaar rekent in graden/s. Past `GYRO_Z_SIGN` toe |
 | `damp_yaw_rate(gyro_rate)` | Demping van de draaisnelheid op alleen de gyro. **Houdt geen koers vast** — heette daarom eerder ten onrechte `hold_heading()`; zie de cascade-uitleg hierboven |
 | `turn_authority_deg_s(rate)` | Maximale draaisnelheid bij een gegeven rijsnelheid |
 | `halt()` (= `stop()`) | Onmiddellijke stop, drivers blijven **aan**: de motoren houden hun positie. Dit is het gedrag van `stepper.stop()` |
@@ -372,7 +371,7 @@ Een gevraagde snelheid onder `V_START_CM_S` wordt gerespecteerd en levert géén
 Twee kalibraties, in te passen in de kalibratiesessie. Zonder deze stuurt de kar structureel scheef, hoe goed de ramp ook is:
 
 1. **Afstandsschaal** — rijd een opgemeten 1,00 m, meet de werkelijk afgelegde afstand, corrigeer `WHEEL_CIRC`. Vangt zowel de resterende meetfout als de belaste rolomtrek.
-2. **Rotatieschaal** — commandeer exact 360° (28632 stappen per wiel, tegengesteld), meet de resthoek met de GY9250, corrigeer `TRACK_WIDTH`. De effectieve spoorbreedte is door tyre-scrub meestal 1–5 % groter dan de geometrische 136 mm.
+2. **Rotatieschaal** — commandeer exact 360° (28632 stappen per wiel, tegengesteld), meet de resthoek met de ICM-20948, corrigeer `TRACK_WIDTH`. De effectieve spoorbreedte is door tyre-scrub meestal 1–5 % groter dan de geometrische 136 mm.
 
 #### Koersvolgfout (voorheen "slipdetectie")
 
@@ -401,12 +400,12 @@ Als regressie ook de drie toestandsfouten die hierin zaten: `finish()` tijdens d
 
 #### Nog te verifiëren op hardware
 
-- **Drie losse tekenconventies.** Ze corrigeren verschillende fouten en horen dus niet in één constante — een omgekeerd gemonteerde GY9250 vraagt een ander gyroteken zonder dat er iets mankeert aan de motorbekabeling. Publiek geldt overal: **positief = naar rechts**.
+- **Drie losse tekenconventies.** Ze corrigeren verschillende fouten en horen dus niet in één constante — een omgekeerd gemonteerde ICM-20948 vraagt een ander gyroteken zonder dat er iets mankeert aan de motorbekabeling. Publiek geldt overal: **positief = naar rechts**.
   - `MOTOR_TURN_SIGN` (+1 / −1): welke fysieke motor links of rechts zit. Test: `rotate_deg(+90)` moet naar **rechts** draaien en `heading()` moet daarna ≈ +90 geven.
   - `GYRO_Z_SIGN` (+1 / −1): opgeheven wielen, draai de kar met de hand naar rechts — `gyro_z_deg_s(sensor)()` moet **positief** zijn.
   - `LDR_DIFF_SIGN` (+1 / −1): houd een lamp rechts van de kar — `ldr_diff()` moet **positief** zijn.
 - `CYCLES_FIXED = 5`: de vaste PIO-cyclusoverhead **per stap binnen een segment** (`mov[2]` = 3, delaylus = delay + 1, `jmp(y_dec)` = 1). Daar komt per **segmentovergang** nog 4 cycles bij voor `pull`/`out`/`out`/`mov`, die niet in de formule zitten; de effectieve overhead is dus `5 + 4/repeat`. Bij de 256 rampsegmenten is dat 0,02 %, bij segmenten van 1 stap 0,4 %. De waarde is **berekend, nog niet gemeten**. `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`; meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, en controleer met een **logic analyzer** ook de pulsbreedte (verwacht 200 ns) en of er stappen wegvallen.
-- Maximale startsnelheid en maximale versnelling, met de GY9250 als onafhankelijke referentie (de PIO-teller kan een stall niet zien). De aangenomen 0,1 omw/s is conservatief — 20 volle stappen/s ligt ruim binnen het pull-in gebied van elke NEMA 17.
+- Maximale startsnelheid en maximale versnelling, met de ICM-20948 als onafhankelijke referentie (de PIO-teller kan een stall niet zien). De aangenomen 0,1 omw/s is conservatief — 20 volle stappen/s ligt ruim binnen het pull-in gebied van elke NEMA 17.
 - **Snelheidsverdubbeling (2026-09-19).** Met VREF 1,0→1,5 V en de motor nu ook echt op 24 V i.p.v. eerdere 12V-bankproeven is `V_MAX_CM_S` elektrisch ruim onderbouwd te verdubbelen (19,1 → 38,2 cm/s, zie *Ontwerpbasis*/koppelbegroting hierboven) — bewust nog niet doorgevoerd in `stepper_ramp.py`/`stepper_ramp_v2.py`/`stepper_rmp.py`, want dat verandert ook ramptijd, remweg (`stopping_distance_cm()`) en alle kentallen die op 19,1 cm/s gebaseerd zijn. Eerst hier valideren, dan pas `V_MAX_CM_S` aanpassen én de kentallen-tabel herzien.
 - Regelversterkingen `kp_ldr` en `kp_gyro`. De standaard `kp_ldr = 25` geeft bij een vol LDR-verschil 25 °/s, net onder het plafond van 32,2 °/s, dus de regelaar verzadigt normaal niet.
 - `fifo_join=PIO.JOIN_TX` is **niet** gebruikt (niet geverifieerd in deze MicroPython-versie). Werkt het, dan verdubbelt de FIFO-runway van 60 naar 140 ms.
@@ -459,7 +458,7 @@ Bron: [`config.json`](config.json) (sectie `"servo"`). `lib/servo/servo_crl.py` 
 - SETPOINT-modus: PI stuurt positie bij zodat stroom op setpoint blijft.
 - LIMIT-modus: positie is leidend; PI-limiter trekt terug als stroom de limiet overschrijdt.
 
-**`config.json` (projectroot):** eerste stap van het geplande centrale configuratiebestand (zie *Bekende issues/TODO* → calibraties). Bevat nu alleen een `"servo"`-sectie, met per servo-nummer (als string-key: `"1"`, `"2"`, `"4"`) `rest_pct`, `max_pct` en optioneel `horizontal_pct`, plus vrije `label`/`note`-velden voor documentatie. Wordt uitsluitend gelezen door `servo_crl.py` bij het instantiëren van `ServoController`; ontbreekt het bestand of de sectie, dan gelden de hardgecodeerde `DEFAULT_REST_PCT`/`DEFAULT_MAX_PCT` in dat bestand. GY9250-, LDR- en netwerk-secties zijn nog niet geïmplementeerd (zie de betreffende to-do-items).
+**`config.json` (projectroot):** eerste stap van het geplande centrale configuratiebestand (zie *Bekende issues/TODO* → calibraties). Bevat nu alleen een `"servo"`-sectie, met per servo-nummer (als string-key: `"1"`, `"2"`, `"4"`) `rest_pct`, `max_pct` en optioneel `horizontal_pct`, plus vrije `label`/`note`-velden voor documentatie. Wordt uitsluitend gelezen door `servo_crl.py` bij het instantiëren van `ServoController`; ontbreekt het bestand of de sectie, dan gelden de hardgecodeerde `DEFAULT_REST_PCT`/`DEFAULT_MAX_PCT` in dat bestand. ICM-20948-, LDR- en netwerk-secties zijn nog niet geïmplementeerd (zie de betreffende to-do-items).
 
 ---
 
@@ -507,10 +506,11 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 **Config:**
 - `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
 - `WHEEL_BASE_CM = 13,6 cm` — spoorbreedte hart-op-hart, voor graden→cm omrekening. **Stond op 18,5 cm**, terwijl de gemeten spoorbreedte 13,6 cm is; een gecommandeerde 370°-scan draaide daardoor in werkelijkheid **503°**. Moet gelijk blijven aan `TRACK_WIDTH` in `stepper_ramp.py`; empirische correctie (tyre-scrub, backlash) hoort in `ROT_SCALE`.
-- **[CONFIG]** `LDR_R_FIXED_OHM = 10 000` — pull-up naar 3V3 (R29/R30). **Geschiedenis: 10 000 → 1000 → weer 10 000.** De stap naar 1 kΩ was voor meer resolutie op de bundelas (1 kΩ geeft ~9,1–16,7 % full-scale i.p.v. ~0,99–1,96 % bij 10 kΩ voor een LDR van 100–200 Ω, ca. 372–683 tegen 41–80 echte 12-bit counts), maar is met de nieuwe, fellere lichtbron weer teruggedraaid. **[TE VERIFIËREN]** of de eerdere zorg — dat de bundelas-Q-daling van ~34 LSB met 10 kΩ nog maar ~4,4 LSB overhoudt en in de ruis verdwijnt — met de fellere bron nog geldt. MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
+- **[CONFIG]** `LDR_R_FIXED_OHM = 4 700` — pull-up naar 3V3 (R29/R30), ook in `config.json` → `"ldr"`. **Geschiedenis: 10 000 → 1000 → 10 000 → 4 700.** Met de huidige lamp loopt de LDR van ~470 Ω (15 cm) tot ~45 kΩ (4 m); 4,7 kΩ ligt op het geometrisch midden en geeft ~350–1000 echte 12-bit codes per e-voud over dat hele bereik (rond 0° ≈ 16–46 codes per graad koersfout). Een veel hogere pull-up (200 kΩ) wint pas boven ~4 m en houdt bij 13 cm maar ~10 codes per e-voud over. Oude toelichting: De stap naar 1 kΩ was voor meer resolutie op de bundelas (1 kΩ geeft ~9,1–16,7 % full-scale i.p.v. ~0,99–1,96 % bij 10 kΩ voor een LDR van 100–200 Ω, ca. 372–683 tegen 41–80 echte 12-bit counts), maar is met de nieuwe, fellere lichtbron weer teruggedraaid. **[TE VERIFIËREN]** of de eerdere zorg — dat de bundelas-Q-daling van ~34 LSB met 10 kΩ nog maar ~4,4 LSB overhoudt en in de ruis verdwijnt — met de fellere bron nog geldt. MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
 - **[CONFIG]** `LDR_R_MIN_OHM = 20` — ondergrens procentschaal. **Was 60**, waardoor de schaal dichtbij de bron vastklemde op 100 % en de eindfase geen informatie meer had.
-- **[CONFIG]** `LDR_R_MAX_OHM = 20 000` — ongewijzigd. Over 20 Ω … 20 kΩ blijft de resolutie 79–1024 werkelijke codes per e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
-- **[TE KALIBREREN]** `LDR_GAIN_B = 1,136` — huidige kalibratiefactor voor differentiële meting. **Moet opnieuw gekalibreerd worden**: deze factor compenseerde de tolerantie van een eerder R29/R30-paar, en is sindsdien twee keer van weerstandswaarde gewisseld (zie `LDR_R_FIXED_OHM` hierboven).
+- **[CONFIG]** `LDR_R_MAX_OHM = 1 000 000` — **was 20 000**, waardoor beide LDR's vanaf ~2 m op 0 % vastklemden en er geen richtingsinformatie meer was (4 m ≈ 31–45 kΩ). 1 MΩ ligt net onder de donkerwaarde (~1,5 MΩ).
+- **[GEKALIBREERD 2026-10-19]** `LDR_B_GAMMA = 1,0772`, `LDR_B_LN_C = −0,4228` (ook in `config.json` → `"ldr"`) — vervangen de vaste `LDR_GAIN_B = 1,136`. Cel B wordt naar cel A omgerekend met een machtsverband: `ln R_B' = (ln R_B − LN_C) / GAMMA`. De cellen verschillen in helling, niet in een vaste factor: de beste vaste gain liet op 0,15–4 m tot 0,20 restfout in ln R over (~5° koersfout), de machtscorrectie 0,036 (~1°). Meetdata en analyse: [`Meting_LDR_afstand_hoek.md`](Meting_LDR_afstand_hoek.md).
+- **Richtingssignaal** `ldr_diff = ln R_A − ln R_B'` (`diff_from_adc()`, `measure_diff()`, `read_synced_diff()`): positief = bron rechts (B is de rechter cel), dus `LDR_DIFF_SIGN = +1`. Op 0,5 m: ±0,02 bij 1°, ±0,2 bij 5°, ±0,75 bij 10°, ±1,4 bij 15°; monotoon tot ±15°, teken klopt tot ±25°. Bewust geen (A−B)/(A+B), die explodeert als beide cellen donker zijn.
 - `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 samples. De scan houdt drie `array`'s van 1110 woorden aan (LDR A, LDR B, stapperstand), samen ~13 KB; ruim binnen RAM.
 
 **Fysieke montage (gemeten, 2026-09-19):**
@@ -676,9 +676,9 @@ Ter vergelijking: de spleet halveren wint een factor 2, de ultrasoonfout halvere
 
 - **`γ` (LDR-exponent) en `w` (bundelhalfhoek) moeten gemeten worden** — beide zitten in élke formule hierboven. Zie [`tests/test_ldr_beam.py`](tests/test_ldr_beam.py). De huidige `w ≈ 33°` komt uit één meetpunt met een *aangenomen* `γ = 0,7`; bij `γ = 0,9` is de bundel breder, bij `γ = 0,5` smaller. **Onafhankelijke schatting (2026-09-19):** de lichtbron heeft volgens opgave een **openingshoek van ca. 90°, en daarna vrijwel donker** (geen geleidelijke uitdoving). Datasheet-"openingshoek" is typisch een halve-intensiteit-specificatie, dezelfde definitie als `halfwaarde_halfhoek = w × 0,8326` in `bundel()` — terugrekenen geeft `w ≈ 45 / 0,8326 ≈ 54°`, merkbaar breder dan de huidige `w ≈ 33°`-aanname. Dit is een ruwe fabrieksopgave, geen vervanging voor een echte `bundel()`-meting, maar wel een aanwijzing dat de huidige `w` een onderschatting kan zijn.
   **Constructie (gemeten):** de lichtspleet is **verticaal, 8 mm breed**, met de LED's **~8 mm achter het front**. Een zuivere geometrische aperture-inschatting voor een puntbron op die diepte (`atan(halve breedte / diepte) = atan(4/8) ≈ 26,6°` halfhoek) ligt merkbaar smaller dan de gemeten ~45°, dus de LED's stralen zelf al breder uit dan de spleet minimaal zou toelaten — de spleet vignetteert gedeeltelijk, maar is niet de enige beperkende factor. **[TE VERIFIËREN]** Een scherpe "90° en dan donker"-overgang past eigenlijk beter bij een (deels) aperture-gedomineerd, hard afgekapt profiel dan bij de nu aangenomen **Gaussische** bundelvorm (`exp(-(φ/w)²)`), die per definitie geleidelijk uitdooft en nooit echt "donker" wordt. Dit is een aanwijzing dat het Gaussische model bij grote hoeken kan afwijken van de werkelijkheid, ook al is het dichtbij de as (waar de kar meestal werkt) waarschijnlijk een goede benadering — pas te beoordelen met een echte `bundel()`-meting.
-- **LDR-gain-kalibratie** (gevoeligheidsverschil A/B); zonder die correctie stuurt de kar scheef.
+- **LDR-gain-kalibratie** (gevoeligheidsverschil A/B) — **gedaan 2026-10-19** met een machtscorrectie, zie `LDR_B_GAMMA`.
 - **Odometriekalibratie** (`WHEEL_CIRC`, `TRACK_WIDTH`).
-- **Hardware/code-koppeling:** R29/R30 zijn (na een tussenstop op 1 kΩ) weer teruggezet naar **10 kΩ**, en `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) is meegewijzigd naar 10 000. Blijft die op 1000 staan terwijl de hardware op 10 kΩ zit, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt — `tests/test_ldr_beam.py` z'n `controleer_config()` vangt dat verschil af. **[TE VERIFIËREN]** de gevoeligheidszorg die destijds tot de stap naar 1 kΩ leidde: de `y`-meting moet een ΔQ van ~0,01 zien, wat met 1 kΩ ongeveer **38 u16-LSB's** was tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Of de nieuwe, fellere lichtbron dat verschil compenseert (hoger signaalniveau, dus effectief meer LSB's per ΔQ) moet nog op hardware bevestigd worden. De 1 ms-gemiddelde sampling in `measure_now()` (zie boven) onderdrukt alleen de 100Hz-netrimpel, niet deze ADC-quantisatiegrens.
+- **Hardware/code-koppeling:** R29/R30 zijn nu **4,7 kΩ** (eerder 10 kΩ → 1 kΩ → 10 kΩ), en `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) en `config.json` staan op 4 700. Oude toelichting: Blijft die op 1000 staan terwijl de hardware op 10 kΩ zit, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt — `tests/test_ldr_beam.py` z'n `controleer_config()` vangt dat verschil af. **[TE VERIFIËREN]** de gevoeligheidszorg die destijds tot de stap naar 1 kΩ leidde: de `y`-meting moet een ΔQ van ~0,01 zien, wat met 1 kΩ ongeveer **38 u16-LSB's** was tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Of de nieuwe, fellere lichtbron dat verschil compenseert (hoger signaalniveau, dus effectief meer LSB's per ΔQ) moet nog op hardware bevestigd worden. De 1 ms-gemiddelde sampling in `measure_now()` (zie boven) onderdrukt alleen de 100Hz-netrimpel, niet deze ADC-quantisatiegrens.
 - `LDR_R_MIN_OHM` staat nu op **20 Ω** (was 60 Ω). Voor de bundelasberekening en eindfase heeft werken in `ln R` de voorkeur boven een afgekapte procentschaal; controleer op hardware of 20 Ω voldoende marge tegen verzadiging geeft.
 - **Grijsfilter** over de opening als de LDR fysiek verzadigt (100 Ω is erg laag voor CdS). Geen diffusor en geen kleinere opening — die verpesten de richtingsgevoeligheid.
 - **Arbitrage met het kompas:** tijdens de nadering is de **LDR leidend** voor de richting; de gyro-Z doet alleen storingsonderdrukking (dat is dus geen dubbele besturing). De **magnetometer** wordt tijdens het rijden níet gebruikt omdat de stappenmotoren het veld verstoren; die is voor de terugweg, waar een absolute koers nodig is.
@@ -826,7 +826,7 @@ De twee bankmetingen zijn zo opgezet dat ze elk **één factor isoleren**: `gamm
 
 ### `webserver` — microdot-websocket (Pico 2 W)
 
-Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karretje vanuit een standaard browser bediend en uitgelezen kan worden. Is ontworpen om op **core 0** naast de hoofdcontroltaken te draaien; core 1 is gereserveerd voor GY9250 + display. De interactie tussen MicroPython, CYW43/lwIP, `_thread` en de control-loop moet nog onder belasting worden gevalideerd.
+Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karretje vanuit een standaard browser bediend en uitgelezen kan worden. Is ontworpen om op **core 0** naast de hoofdcontroltaken te draaien; core 1 is gereserveerd voor ICM-20948 + display. De interactie tussen MicroPython, CYW43/lwIP, `_thread` en de control-loop moet nog onder belasting worden gevalideerd.
 
 **Functionaliteit:**
 - **Sensoren uitlezen** (browser, ~5–10 Hz): LDR A/B in %, ultrasoon-afstand in cm (of time-out), kompasrichting in graden, servoposities in %, stepper-snelheid/richting/afgelegde weg.
@@ -847,8 +847,9 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 ## Bekende issues / TODO
 
 - [ ] `lib/LDR/ldr_scan_isr.py` — herzien scan-algoritme implementeren: 370°-scan (geen pre-roll), piek op A≈B-kruispunt i.p.v. som-maximum, kortste weg terug, en closed-loop uitlijnen via null-seek op A−B
-- [x] **Gyroscoop/kompas (GY9250) hardwarevalidatie (2026-09-19) — negatief resultaat.** I2C-scan (`tests/test_gy9250_i2c_scan.py`) laat zien dat de AK8963-magnetometer nooit op de bus verschijnt; whoami van de accel/gyro-chip is `0x70` ("standalone MPU6500"), een echte MPU-9250 geeft `0x71`. **Huidig bordje heeft dus geen magnetometer.** Gyro/accelerometer werken wél (worden al gebruikt in `stepper_ramp.py`). Besluit: vervangend, echt MPU-9250-bordje bestellen; software ongewijzigd laten tot dat er is.
-- [ ] Na aankomst vervangend GY-9250-bordje: whoami opnieuw controleren (moet `0x71` zijn) en dan pas verder met tekenconventie, bias, magnetometerkalibratie en hardwaregedrag met draaiende stappenmotoren.
+- [x] **Gyroscoop/kompas (GY9250) hardwarevalidatie (2026-09-19) — negatief resultaat.** I2C-scan (`tests/test_gy9250_i2c_scan.py`) laat zien dat de AK8963-magnetometer nooit op de bus verschijnt; whoami van de accel/gyro-chip is `0x70` ("standalone MPU6500"), een echte MPU-9250 geeft `0x71`. **Huidig bordje heeft dus geen magnetometer.** Gyro/accelerometer werken wél (worden al gebruikt in `stepper_ramp.py`). Besluit: vervangend bordje bestellen.
+- [x] **Vervanger: ICM-20948 besteld (2026-10-19)** in plaats van een MPU-9250 (die is end-of-life en wordt veel nagemaakt). Code omgezet: nieuwe driver `lib/ICM20948/icm20948.py` met dezelfde API als de Tuupola-driver (`acceleration`, `gyro` in rad/s, `magnetic` in µT, `temperature`, `whoami`); basic/fusion/kalibratiescripts en tests hernoemd naar `ICM20948`/`test_icm20948_*`. Kalibratiewaarden gaan nu als `mag_offset=`/`mag_scale=` naar de `ICM20948`-constructor. De magnetometerassen worden in de driver uitgelijnd op die van accel/gyro (X gelijk, Y en Z omgekeerd volgens datasheet), wat de kantelcompensatie in `fusion.py` nodig heeft.
+- [ ] Na levering ICM-20948: `tests/test_icm20948_i2c_scan.py` draaien (WHO_AM_I `0xEA`, `0x0c` na bypass, AK09916 `0x48`/`0x09`). Daarna: asuitlijning van de magnetometer controleren (kop naar het noorden en 90° draaien → koers verandert ~90° in dezelfde richting als de geïntegreerde gyro-Z), `GYRO_Z_SIGN` opnieuw verifiëren (andere chip/montage), bias, magnetometerkalibratie en hardwaregedrag met draaiende stappenmotoren.
 - [ ] OLED (SSD1306) — integratie nog niet geïmplementeerd; voorstel staat in `te doen.md`.
 - [x] GPIO-tabel gecontroleerd en geverifieerd tegen KiCad netlist V1.2 (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
 - [ ] `test_all.py` converteren naar afzonderlijke testfuncties per module; `test_all.py` behouden als snelle controletest.
@@ -864,7 +865,8 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [x] **Fase-gesynchroniseerde achtergrond-sampling toegevoegd:** `ServoController.attach_tick_callback()` (`lib/servo/servo_crl.py`, GPIO5-IRQ omgezet van falling naar **rising** edge) plus `start_synced_sampling()`/`read_synced()` in `lib/LDR/ldr_scan_isr.py`. Zie *Rijden naar de lichtbron* → Fase-gesynchroniseerde achtergrond-sampling.
 - [ ] **Op hardware verifiëren:** dat `attach_tick_callback()` de servo-timing niet meetbaar verstoort (de callback loopt vóór `micropython.schedule()` in dezelfde harde IRQ); dat er geen ADC-mux-conflict optreedt als `read_synced()`-sampling en een actieve `scan()` elkaar toch overlappen; en of de aanname "statische bias, verwaarloosbare drift binnen één rijsegment" in de praktijk klopt (zie de kanttekening bij servo-PWM-klok vs. 230V-net-fase in de LDR-sectie).
 - [x] `WHEEL_BASE_CM` in `ldr_scan_isr.py` gecorrigeerd van 18,5 naar 13,6 cm — een 370°-scan draaide in werkelijkheid 503°.
-- [ ] **`LDR_GAIN_B` opnieuw kalibreren** na de weerstandswissels van R29/R30 (10 kΩ → 1 kΩ → 10 kΩ): die factor compenseerde de tolerantie van een eerder paar en is niet gegarandeerd nog juist.
+- [x] **LDR-kalibratie (2026-10-19):** `LDR_GAIN_B` vervangen door de machtscorrectie `LDR_B_GAMMA`/`LDR_B_LN_C`, `LDR_R_FIXED_OHM` → 4 700 (werkelijke R29/R30), `LDR_R_MAX_OHM` 20 kΩ → 1 MΩ, nieuw richtingssignaal `ldr_diff = ln R_A − ln R_B'`. Gebaseerd op [`Meting_LDR_afstand_hoek.md`](Meting_LDR_afstand_hoek.md).
+- [ ] HeadingController op hardware afstemmen met `read_synced_diff()` als `ldr_diff` (`kp_ldr`, deadband 0,03 ≈ 1°).
 - [ ] **[TE VERIFIËREN]** of de fellere lichtbron de eerdere resolutiezorg bij 10 kΩ (~4,5 LSB ΔQ op de bundelas, tegen ~38 LSB met 1 kΩ) compenseert — zie *Randvoorwaarden / afhankelijkheden* hierboven.
 - [ ] **Delertopologie eenmalig verifiëren op hardware:** schijn licht op LDR A en lees de ruwe ADC. Gaat die naar nul, dan is `_adc_to_res_ohm()` juist; gaat die naar 65535, dan loopt de hele schaal omgekeerd en moet de formule `R_FIXED × (65535 − adc)/adc` worden.
 - [ ] **370°-scan opnieuw controleren** met de gecorrigeerde `WHEEL_BASE_CM`. Waren eerdere scans empirisch afgestemd op 18,5, dan wijken piekposities nu af.
@@ -892,4 +894,4 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 
 ## Afhankelijkheden
 
-MicroPython voor **Raspberry Pi Pico 2 W (RP2350 + CYW43439)**. **Exacte firmwareversie/build nog vastleggen** voor reproduceerbaarheid. Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython), `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).
+MicroPython voor **Raspberry Pi Pico 2 W (RP2350 + CYW43439)**. **Exacte firmwareversie/build nog vastleggen** voor reproduceerbaarheid. Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython; alleen nog voor het oude MPU-6500-bordje), `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).

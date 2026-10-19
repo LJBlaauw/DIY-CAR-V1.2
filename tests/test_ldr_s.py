@@ -25,7 +25,7 @@ from servo_crl import ServoController
 #
 # Alle drie in dezelfde %-schaal (log-resistance, zie ldr_scan_isr.py), zodat
 # ze rechtstreeks te vergelijken zijn. RUW hergebruikt daarvoor bewust de
-# _adc_to_res_ohm()/_res_to_percent_log()-functies uit ldr_scan_isr in plaats
+# _adc_to_percent_ab()-functie uit ldr_scan_isr in plaats
 # van een derde kopie van die formule te maken (zie de LDR_R_FIXED_OHM-
 # geschiedenis in globale_specificatie_NL.md voor waarom dat eerder al
 # fout ging).
@@ -69,11 +69,8 @@ def ruw_volt():
 def ruw_pct():
     """Eén losse sample per kanaal, in dezelfde %-schaal als measure_now()
     en read_synced()."""
-    ra_ohm = ldr_scan_isr._adc_to_res_ohm(_adc_a.read_u16())
-    rb_ohm = ldr_scan_isr._adc_to_res_ohm(_adc_b.read_u16())
-    pa = round(ldr_scan_isr._res_to_percent_log(ra_ohm, ldr_scan_isr.LDR_GAIN_A), 1)
-    pb = round(ldr_scan_isr._res_to_percent_log(rb_ohm, ldr_scan_isr.LDR_GAIN_B), 1)
-    return pa, pb
+    pa, pb = ldr_scan_isr._adc_to_percent_ab(_adc_a.read_u16(), _adc_b.read_u16())
+    return round(pa, 1), round(pb, 1)
 
 
 toon(["LDR SYNC test", "check: GPIO2 naar", "GPIO5 verbonden?", "start over 2s..."])

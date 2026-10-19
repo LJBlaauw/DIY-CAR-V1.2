@@ -19,5 +19,11 @@
       "max_pct": 8.6,
       "note": "rest_pct = maximaal open (0 graden, ook de rustpositie); max_pct = maximaal dicht (180 graden). Handmatig gekalibreerd 2026-09-19."
     }
+  },
+  "ldr": {
+    "r_fixed_ohm": 4700,
+    "b_gamma": 1.0772,
+    "b_ln_c": -0.4228,
+    "note": "Pull-up R29/R30 = 4,7 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19."
   }
 }

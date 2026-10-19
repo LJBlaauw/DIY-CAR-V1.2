@@ -10,7 +10,8 @@ from ssd1306 import SSD1306_I2C
 # weg te middelen wordt elke 1 ms een sample genomen en uitgemiddeld over
 # 10 samples: 10 x 1 ms = 10 ms = precies één 100Hz-periode, dus de rimpel
 # heft zichzelf op in het gemiddelde.
-
+laser=Pin(15, Pin.OUT)
+laser.on()
 LDR_PIN_A = 26
 LDR_PIN_B = 27
 

@@ -166,7 +166,7 @@ MAX_DIFF_FRAC = 0.20         # maximale snelheidsdifferentie per wiel (+/- 20%)
 # ----------------------------------------------------------------
 # Drie ONAFHANKELIJKE hardwaregrenzen, elk met een eigen teken. Ze corrigeren
 # verschillende fouten en horen daarom niet in één constante: een omgekeerd
-# gemonteerde GY9250 vraagt een ander gyroteken zonder dat er iets mankeert aan
+# gemonteerde ICM-20948 vraagt een ander gyroteken zonder dat er iets mankeert aan
 # de motorbekabeling of aan rotate_deg(). Zet de tekens ALLEEN hier, aan de
 # hardwaregrens; de rest van de code rekent in de publieke conventie.
 #
@@ -463,7 +463,7 @@ class _Motor:
         """Monotone hardware-pulsteller. Kent geen richting.
 
         LET OP: dit telt COMMANDO'S, geen beweging. Bij wielslip (hobbel, gleuf)
-        loopt deze teller door. De GY9250 ziet daar alleen de ROTATIE-component
+        loopt deze teller door. De ICM-20948 ziet daar alleen de ROTATIE-component
         van; werkelijke lineaire verplaatsing vraagt een externe referentie
         (zie de kop, "WAT DE ODOMETER WEL EN NIET IS").
         """
@@ -825,7 +825,7 @@ def heading():
 
     Volgt uit het SIGNED stappenverschil tussen de wielen, dus dit werkt ook bij
     een rotatie op de plaats. Ziet GEEN wielslip; voor de werkelijke koers moet
-    je dit fuseren met de GY9250-gyro.
+    je dit fuseren met de ICM-20948-gyro.
 
     Bij MOTOR_TURN_SIGN = +1 is A het RECHTER wiel: naar rechts draaien betekent
     dat B (links) verder loopt, dus B - A > 0. Hetzelfde teken als rotate_deg()
@@ -1114,7 +1114,7 @@ async def adrive(dist_cm, speed_cm_s=V_MAX_CM_S, correction=None, **kw):
 
 
 # ----------------------------------------------------------------
-# GY9250-koppeling — ongewijzigd t.o.v. V1
+# ICM-20948-koppeling — ongewijzigd t.o.v. V1
 # ----------------------------------------------------------------
 def gyro_z_deg_s(sensor, sign=None):
     """Maak van een MPU6500/MPU9250-object een callable die GRADEN/s teruggeeft.
@@ -1123,7 +1123,7 @@ def gyro_z_deg_s(sensor, sign=None):
     geldt als de sensor omgekeerd gemonteerd is. Geef `sign` mee om die
     constante voor deze ene sensor te overrulen.
 
-    De driver in lib/GY9250 heeft `gyro_sf=SF_RAD_S` als default en levert dus
+    De driver in lib/ICM20948 heeft `gyro_sf=SF_RAD_S` als default en levert dus
     RADIALEN/s, terwijl HeadingController in graden/s rekent. Rechtstreeks
     `sensor.gyro[2]` doorgeven maakt de gyrocorrectie 57,3x te klein.
 
@@ -1152,7 +1152,7 @@ class HeadingController:
         Vereist de LDR-gevoeligheidskalibratie; zonder die correctie stuurt de
         kar structureel scheef.
 
-    BINNENLUS (snel, elke slice) — GY9250 gyro-Z
+    BINNENLUS (snel, elke slice) — ICM-20948 gyro-Z
         Onderdrukt storingen: hobbels, gleuven, wielslip, ongelijke vloer.
         Meet de WERKELIJKE draaisnelheid; het verschil met de gewenste
         draaisnelheid wordt weggeregeld. Werkt ook als de lichtbron even
@@ -1162,7 +1162,7 @@ class HeadingController:
     de storingsonderdrukking. Ze sturen niet hetzelfde ding.
 
     Het magnetometer/kompas is tijdens het rijden expres NIET gebruikt: de
-    stappenmotoren verstoren het veld (zie de GY9250-stappenmotorkalibratie).
+    stappenmotoren verstoren het veld (zie de ICM-20948-stappenmotorkalibratie).
     Het kompas is voor de terugweg, waar een absolute koers nodig is.
 
     `gyro_rate` moet GRADEN/s leveren — gebruik gyro_z_deg_s(sensor).
@@ -1338,7 +1338,7 @@ def stall_test(accel_cm_s2, speed_cm_s=V_MAX_CM_S, dist_cm=60.0, v_start=V_START
     GEBRUIK DAAROM ALTIJD EEN ONAFHANKELIJKE REFERENTIE erbij (zie
     stepper_ramp_NL.md, "Nog te verifiëren op hardware"):
       - kijk/luister of de motor stil blijft staan of zoemt i.p.v. draait;
-      - of leg de GY9250 gyro-Z ernaast als de kar recht vooruit rijdt.
+      - of leg de ICM-20948 gyro-Z ernaast als de kar recht vooruit rijdt.
 
     Deze functie meet dus vooral TIMING (haalt de beweging de verwachte duur,
     en werkt de opramp-IRQ), niet de mechanische stall zelf.

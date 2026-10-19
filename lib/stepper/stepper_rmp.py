@@ -12,7 +12,7 @@
 # ----------------------------------------------
 # Dit bestand deelt met opzet GEEN code met stepper_ramp_v2.py, ook al is de
 # PIO/DMA-kern in essentie hetzelfde. Reden: v2 (en v1) zijn gebouwd voor een
-# kar MET kompas/gyro (GY9250) en LDR's, en bevatten daardoor concepten die
+# kar MET kompas/gyro (ICM-20948) en LDR's, en bevatten daardoor concepten die
 # op de oudere hardware — waar dit bestand voor bedoeld is — niet bestaan:
 #
 #   - HeadingController, gyro_z_deg_s(), damp_yaw_rate()  -- verwerken

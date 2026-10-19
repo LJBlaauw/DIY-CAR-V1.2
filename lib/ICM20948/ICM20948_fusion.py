@@ -1,8 +1,7 @@
 import machine
 import time
 import _thread
-from mpu9250 import MPU9250
-from ak8963 import AK8963
+from icm20948 import ICM20948
 from fusion import Fusion  # Importeer het complementaire fusion-filter
 
 actuele_koers = 0.0
@@ -12,17 +11,15 @@ def geavanceerd_kompas_core1():
     global actuele_koers
 
     # Initialiseer sensor
-    # GY9250 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
+    # ICM-20948 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
     i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 
-    # Uw kalibratiedata injecteren (uit Calibrate_GY9250.py)
-    dummy = MPU9250(i2c)  # opent de I2C-bypass naar de AK8963
-    ak8963 = AK8963(
+    # Uw kalibratiedata injecteren (uit Calibrate_ICM20948.py)
+    sensor = ICM20948(
         i2c,
-        offset=(-24.5, 12.3, -5.1),
-        scale=(0.95, 1.02, 1.03),
+        mag_offset=(-24.5, 12.3, -5.1),
+        mag_scale=(0.95, 1.02, 1.03),
     )
-    sensor = MPU9250(i2c, ak8963=ak8963)
 
     # Start het fusion-filter. Fusion houdt zelf de verstreken tijd (dt)
     # tussen updates bij via deltat.DeltaT (time.ticks_us onder MicroPython).

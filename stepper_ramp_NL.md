@@ -118,7 +118,7 @@ return 0xFFFFFFFF - self.cnt.get()
 Twee dingen om te weten:
 
 - **De teller kent de DIR-pin niet.** Hij telt flanken. Bij een rotatie op de plaats lopen beide tellers positief op terwijl de wielen tegengesteld draaien. Zie §8.
-- **De teller telt commando's, geen beweging.** Bij wielslip loopt hij door. De GY9250 ziet daar alleen de **rotatie**-component van; werkelijke *lineaire* verplaatsing kan een IMU niet leveren, want dubbele integratie van de acceleratiemeter drift te snel. Wat welke bron wel geeft:
+- **De teller telt commando's, geen beweging.** Bij wielslip loopt hij door. De ICM-20948 ziet daar alleen de **rotatie**-component van; werkelijke *lineaire* verplaatsing kan een IMU niet leveren, want dubbele integratie van de acceleratiemeter drift te snel. Wat welke bron wel geeft:
 
   | Bron | Wat je eruit krijgt |
   |---|---|
@@ -475,7 +475,7 @@ mv = sr.drive(50, 19.1, correction=sr.damp_yaw_rate(gyro_z_deg_s(sensor)))
 
 Dit heette `hold_heading()`, maar dat beloofde te veel: het setpoint is hier altijd nul, dus de uitgang is `−kp_gyro × gemeten`. Een externe verdraaiing wordt tegengewerkt *zolang die plaatsvindt*, maar de hoekfout die overblijft wordt daarna niet teruggedraaid, en gyrobias geeft blijvende drift. **Echt** koershouden vraagt integratie van gyro-Z tot een hoek en het wegregelen van díe fout; dat zit er nu niet in.
 
-`gyro_z_deg_s()` is **verplicht** rond de GY9250: [`mpu6500.py`](lib/GY9250/mpu6500.py) heeft `gyro_sf=SF_RAD_S` als default en levert dus **radialen/s**, terwijl de regelaar in graden/s rekent. Rechtstreeks `sensor.gyro[2]` doorgeven maakt de correctie 57,3× te klein.
+`gyro_z_deg_s()` is **verplicht** rond de ICM-20948: [`icm20948.py`](lib/ICM20948/icm20948.py) (en ook de oude `mpu6500.py`) heeft `gyro_sf=SF_RAD_S` als default en levert dus **radialen/s**, terwijl de regelaar in graden/s rekent. Rechtstreeks `sensor.gyro[2]` doorgeven maakt de correctie 57,3× te klein.
 
 ---
 
@@ -505,7 +505,7 @@ Daarnaast als regressie, omdat elk van deze drie eerder fout was:
 | `GYRO_Z_SIGN` (+1 / −1) | opgeheven wielen: draai de kar met de hand naar rechts, `gyro_z_deg_s(sensor)()` moet **positief** zijn |
 | `LDR_DIFF_SIGN` (+1 / −1) | houd een lamp rechts van de kar; `ldr_diff()` moet **positief** zijn |
 | `CYCLES_FIXED = 5` (+ 4/segment) | `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`. Meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, zodat de per-segment overhead zichtbaar wordt. Controleer met een logic analyzer ook de pulsbreedte (verwacht 200 ns) en of er stappen wegvallen |
-| Startsnelheid en max. versnelling | met de GY9250 als onafhankelijke referentie — de PIO-teller kan een stall niet zien |
+| Startsnelheid en max. versnelling | met de ICM-20948 als onafhankelijke referentie — de PIO-teller kan een stall niet zien |
 | `kp_ldr`, `kp_gyro` | de standaard `kp_ldr = 25` geeft bij een vol LDR-verschil 25 °/s, net onder het plafond van 32,2 °/s, dus de regelaar verzadigt normaal niet |
 | Odometriekalibratie | 1,00 m rijden (`WHEEL_CIRC`) en 360° draaien (`TRACK_WIDTH`) |
 | `fifo_join=PIO.JOIN_TX` | niet gebruikt, want niet geverifieerd in deze MicroPython-versie. Werkt het, dan verdubbelt de runway van 60 naar 140 ms |

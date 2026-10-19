@@ -1,6 +1,6 @@
 import machine
 import time
-from mpu9250 import MPU9250
+from icm20948 import ICM20948
 from stepper import rotate, stop, disable
 
 # --- AUTOMATISCHE KALIBRATIE (robot draait zelf rond) ---
@@ -11,9 +11,9 @@ from stepper import rotate, stop, disable
 DRAAI_SNELHEID_CM_S = 8      # rotatiesnelheid van elk wiel
 DRAAI_AFSTAND_CM = 500       # ruim voldoende voor meerdere volle rondjes
 
-# GY9250 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
+# ICM-20948 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
 i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
-sensor = MPU9250(i2c)
+sensor = ICM20948(i2c)  # zonder kalibratie: ruwe (uitgelijnde) waarden
 
 print("START AFTELLEN: Zet de robot vrij op de grond...")
 time.sleep(3)
@@ -77,7 +77,7 @@ soft_iron_y = gemiddelde_straal / chord_y
 soft_iron_z = gemiddelde_straal / chord_z
 
 # Print de kant-en-klare regels voor uw hoofdprogramma
-print("\nKopieer de onderstaande regels naar uw hoofdprogramma (AK8963-constructor):")
-print(f"offset=({hard_iron_x:.2f}, {hard_iron_y:.2f}, {hard_iron_z:.2f})")
-print(f"scale=({soft_iron_x:.4f}, {soft_iron_y:.4f}, {soft_iron_z:.4f})")
+print("\nKopieer de onderstaande regels naar uw hoofdprogramma (ICM20948-constructor):")
+print(f"mag_offset=({hard_iron_x:.2f}, {hard_iron_y:.2f}, {hard_iron_z:.2f})")
+print(f"mag_scale=({soft_iron_x:.4f}, {soft_iron_y:.4f}, {soft_iron_z:.4f})")
 print("\n---------------------------")

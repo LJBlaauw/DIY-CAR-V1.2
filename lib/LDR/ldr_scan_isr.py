@@ -40,30 +40,51 @@ ROT_SCALE            = 1.0
 # (zie hardware/gpio_pinout.md, R29/R30). Fel licht -> lage LDR-weerstand ->
 # lage ADC-waarde. _adc_to_res_ohm() rekent daarop.
 #
-# R29/R30 zijn eerst van 10 kΩ naar 1 kΩ gebracht voor meer resolutie op de
-# bundelas (zie git-historie), maar zijn met de nieuwe, fellere lichtbron weer
-# TERUGGEZET naar 10 kΩ. [TE VERIFIËREN] Met 10 kΩ gebruikt een LDR van
-# 100-200 Ω maar 0,97 % van de ADC-schaal (~40 werkelijke 12-bit codes); de
-# eerdere zorg was dat de bundelas-bepaling (~34 LSB Q-daling nodig) daarmee
-# maar ~4,4 LSB overhoudt en in de ruis verdwijnt. Of de fellere bron dat
-# compenseert (hoger signaalniveau dichter bij de bron) moet nog op hardware
-# gecontroleerd worden — zie ook de 1 ms-gemiddelde sampling in
-# `measure_now()` hieronder en in `tests/test_ldr_beam.py`, die de 100Hz-
-# netrimpel onderdrukt maar niets doet aan deze ADC-quantisatie. Over
-# 20 Ω .. 20 kΩ blijft de resolutie 79-1024 werkelijke 12-bit codes per
-# e-voud, dus het hele werkbereik van 5 m tot 5 cm is bruikbaar.
-LDR_R_FIXED_OHM      = 10_000
-# Ondergrens van de procentschaal. Stond op 60 Ω, maar op de bundelas dichtbij
-# komt de cel daaronder -> de schaal klemde dan vast op 100 % en de eindfase had
-# geen informatie meer. 20 Ω geeft marge en houdt nog ~79 codes per e-voud.
+# R29/R30: 10 kΩ -> 1 kΩ -> 10 kΩ -> nu 4,7 kΩ (zie git-historie en
+# Meting_LDR_afstand_hoek.md). Met de huidige lamp loopt de LDR van ~470 Ω
+# (15 cm) tot ~45 kΩ (4 m). De resolutie per e-voud weerstand is maximaal
+# (ADC_FS/4) als R_ldr = R_FIXED; 4,7 kΩ ligt precies op het geometrisch
+# midden van dat bereik en geeft aan BEIDE uiteinden ~340 12-bit codes per
+# e-voud. Een hogere pull-up wint op afstand weinig en verliest dichtbij
+# bijna alles (200 kΩ: ~10 codes per e-voud bij 13 cm).
+LDR_R_FIXED_OHM      = 4_700
+# Grenzen van de log-procentschaal. Onder: dichtbij komt de cel tot ~470 Ω,
+# 20 Ω geeft ruim marge. Boven: stond op 20 kΩ, waardoor beide LDR's vanaf ~2 m
+# vastklemden op 0 % en er geen richtingsinformatie meer was. 1 MΩ ligt ruim
+# boven 4 m (~45 kΩ) en net onder de donkerwaarde (~1,5 MΩ).
 LDR_R_MIN_OHM        = 20.0
-LDR_R_MAX_OHM        = 20_000.0
-# LET OP: LDR_GAIN_B compenseert ook de tolerantie van het R29/R30-paar. Door
-# de wissel 10 kΩ -> 1 kΩ -> weer 10 kΩ (zie LDR_R_FIXED_OHM hierboven) is dit
-# niet meer gegarandeerd de juiste factor voor het huidige paar. OPNIEUW
-# kalibreren voordat op de absolute LDR-verhouding vertrouwd wordt.
-LDR_GAIN_A           = 1.0
-LDR_GAIN_B           = 1.136
+LDR_R_MAX_OHM        = 1_000_000.0
+
+# Correctie LDR B -> LDR A (machtsverband, zie Meting_LDR_afstand_hoek.md):
+#     ln R_B = GAMMA * ln R_A + LN_C      ->   ln R_B' = (ln R_B - LN_C) / GAMMA
+# De twee cellen verschillen niet in een vaste factor maar in hun helling
+# (gamma); een vaste gain liet op 0,15-4 m tot 0,20 restfout in ln(R) over
+# (~5° koersfout), deze correctie 0,036 (~1°). Kost per meting één aftrekking
+# en één vermenigvuldiging op de log die toch al berekend wordt.
+# Bron: config.json, sectie "ldr"; deze waarden zijn de fallback.
+CONFIG_PATH          = "config.json"
+LDR_B_GAMMA          = 1.0772
+LDR_B_LN_C           = -0.4228
+
+
+def _load_ldr_config():
+    """Lees de "ldr"-sectie uit config.json; {} als die ontbreekt of corrupt is."""
+    try:
+        import json
+        with open(CONFIG_PATH) as f:
+            return json.load(f).get("ldr", {})
+    except Exception:
+        return {}
+
+
+_cfg = _load_ldr_config()
+LDR_R_FIXED_OHM = float(_cfg.get("r_fixed_ohm", LDR_R_FIXED_OHM))
+LDR_B_GAMMA     = float(_cfg.get("b_gamma", LDR_B_GAMMA))
+LDR_B_LN_C      = float(_cfg.get("b_ln_c", LDR_B_LN_C))
+del _cfg
+_INV_B_GAMMA    = 1.0 / LDR_B_GAMMA
+_LN_R_MIN       = math.log(LDR_R_MIN_OHM)
+_LN_R_MAX       = math.log(LDR_R_MAX_OHM)
 
 LDR_SAMPLES_PER_TICK = 8
 TARGET_SAMPLES_PER_DEG = 3
@@ -265,13 +286,8 @@ def measure_now(n=10, interval_ms=1):
         acc_b += _adc_b.read_u16()
         if i < n - 1:
             time.sleep_ms(interval_ms)
-    adc_a = acc_a // n
-    adc_b = acc_b // n
-    ra = _adc_to_res_ohm(adc_a)
-    rb = _adc_to_res_ohm(adc_b)
-    pa = round(_res_to_percent_log(ra, LDR_GAIN_A), 1)
-    pb = round(_res_to_percent_log(rb, LDR_GAIN_B), 1)
-    return (pa, pb)
+    pa, pb = _adc_to_percent_ab(acc_a // n, acc_b // n)
+    return (round(pa, 1), round(pb, 1))
 
 # =========================
 #  FASE-GESYNCHRONISEERDE ACHTERGROND-SAMPLING (servo-PWM-tick)
@@ -286,7 +302,7 @@ def measure_now(n=10, interval_ms=1):
 # (A-B, of Q-verschil over een rit) valt die bias grotendeels weg omdat beide
 # kanalen in dezelfde IRQ-call, op vrijwel hetzelfde moment, dezelfde bias
 # zien. Voor een absolute meting verdwijnt de bias in de gefitte constanten
-# (GAMMA, LDR_GAIN_B).
+# (LDR_B_GAMMA, LDR_B_LN_C).
 #
 # LET OP: de servo-PWM-klok (RP2350) en het 230V-net lopen op onafhankelijke
 # oscillators, dus de fase driftlangzaam weg (orde seconden-tot-minuten voor
@@ -346,11 +362,9 @@ def read_synced():
     Niet-blokkerend: leest alleen de al-klare ping-pong-buffer. Vereist een
     voorafgaande start_synced_sampling(); zonder actieve tick-bron geeft dit
     de laatst berekende waarde (of (0.0, 0.0) als er nog nooit gesampled is)."""
-    ra = _adc_to_res_ohm(int(_sync_buf_a[_sync_ready]))
-    rb = _adc_to_res_ohm(int(_sync_buf_b[_sync_ready]))
-    pa = round(_res_to_percent_log(ra, LDR_GAIN_A), 1)
-    pb = round(_res_to_percent_log(rb, LDR_GAIN_B), 1)
-    return (pa, pb)
+    pa, pb = _adc_to_percent_ab(int(_sync_buf_a[_sync_ready]),
+                                int(_sync_buf_b[_sync_ready]))
+    return (round(pa, 1), round(pb, 1))
 
 # =========================
 #  ADC → %
@@ -371,16 +385,63 @@ def _adc_to_res_ohm(adc_u16):
         adc_u16 = 65534
     return (LDR_R_FIXED_OHM * adc_u16) / (65535.0 - adc_u16)
 
-def _res_to_percent_log(r_ohm, gain=1.0):
-    r = r_ohm / (gain if gain > 0 else 1.0)
-    if r < LDR_R_MIN_OHM: r = LDR_R_MIN_OHM
-    if r > LDR_R_MAX_OHM: r = LDR_R_MAX_OHM
-    ln_min = math.log(LDR_R_MIN_OHM)
-    ln_max = math.log(LDR_R_MAX_OHM)
-    p = 100.0 * (ln_max - math.log(r)) / (ln_max - ln_min)
+def _ln_ab(adc_a, adc_b):
+    """ADC-waarden -> (ln R_A, ln R_B'), met R_B' gecorrigeerd naar cel A."""
+    ln_a = math.log(_adc_to_res_ohm(adc_a))
+    ln_b = (math.log(_adc_to_res_ohm(adc_b)) - LDR_B_LN_C) * _INV_B_GAMMA
+    return ln_a, ln_b
+
+def _ln_to_percent(ln_r):
+    """ln(weerstand) -> 0..100 % (log-schaal, 100 % = LDR_R_MIN_OHM = fel)."""
+    p = 100.0 * (_LN_R_MAX - ln_r) / (_LN_R_MAX - _LN_R_MIN)
     if p < 0.0:   p = 0.0
     if p > 100.0: p = 100.0
     return p
+
+def _adc_to_percent_ab(adc_a, adc_b):
+    """ADC-waarden -> (%A, %B), B gecorrigeerd naar cel A."""
+    ln_a, ln_b = _ln_ab(adc_a, adc_b)
+    return _ln_to_percent(ln_a), _ln_to_percent(ln_b)
+
+# =========================
+#  RICHTINGSSIGNAAL
+# =========================
+#
+# ldr_diff = ln R_A - ln R_B'  (B gecorrigeerd naar cel A, zie LDR_B_GAMMA)
+#
+# Positief = A donkerder dan B = bron ligt RECHTS (B is de rechter cel). Dat
+# is de publieke conventie van stepper_ramp, dus daar LDR_DIFF_SIGN = +1.
+# Gemeten op 0,5 m (Meting_LDR_afstand_hoek.md), kar gedraaid t.o.v. de bron:
+#
+#     bron rechts  1°: +0,02   3°: +0,11   5°: +0,22   10°: +0,79   15°: +1,39
+#     bron links   1°: -0,02   3°: -0,09   5°: -0,19   10°: -0,73   15°: -1,45
+#
+# Monotoon tot ±15°; daarna kijken beide cellen langs de bron en zakt de
+# waarde in (20°: ~0,3-0,4), maar het TEKEN blijft tot ±25° goed. Bewust geen
+# (A-B)/(A+B): die explodeert als beide cellen donker worden.
+
+def diff_from_adc(adc_a, adc_b):
+    ln_a, ln_b = _ln_ab(adc_a, adc_b)
+    return ln_a - ln_b
+
+def measure_diff(n=10, interval_ms=1):
+    """Blokkerend: ldr_diff over één 100Hz-netperiode (zie measure_now)."""
+    import time
+    _init_hw()
+    acc_a = 0
+    acc_b = 0
+    for i in range(n):
+        acc_a += _adc_a.read_u16()
+        acc_b += _adc_b.read_u16()
+        if i < n - 1:
+            time.sleep_ms(interval_ms)
+    return diff_from_adc(acc_a // n, acc_b // n)
+
+def read_synced_diff():
+    """Niet-blokkerend: ldr_diff uit de fase-gesynchroniseerde buffer.
+    Geschikt als ldr_diff-callable voor stepper_ramp.HeadingController."""
+    return diff_from_adc(int(_sync_buf_a[_sync_ready]),
+                         int(_sync_buf_b[_sync_ready]))
 
 def _postprocess_to_percent():
     N = len(_raw_sum_a)
@@ -390,10 +451,7 @@ def _postprocess_to_percent():
     for i in range(N):
         adc_a = _raw_sum_a[i] // LDR_SAMPLES_PER_TICK
         adc_b = _raw_sum_b[i] // LDR_SAMPLES_PER_TICK
-        ra = _adc_to_res_ohm(adc_a)
-        rb = _adc_to_res_ohm(adc_b)
-        pa = _res_to_percent_log(ra, LDR_GAIN_A)
-        pb = _res_to_percent_log(rb, LDR_GAIN_B)
+        pa, pb = _adc_to_percent_ab(adc_a, adc_b)
         pct_a[i] = round(pa, 1)
         pct_b[i] = round(pb, 1)
         avg[i]   = round((pa + pb) * 0.5, 1)

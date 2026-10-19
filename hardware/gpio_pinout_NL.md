@@ -16,8 +16,8 @@
 | GPIO7 | — | NC | — | |
 | GPIO8 | — | NC | — | |
 | GPIO9 | — | NC | — | |
-| GPIO10 | BIDI (SDA) | I2C1 SDA | J7 pin 4 — GY9250 gyroscoop/kompas | *Nog niet geïmplementeerd* |
-| GPIO11 | BIDI (SCL) | I2C1 SCL | J7 pin 3 — GY9250 gyroscoop/kompas | *Nog niet geïmplementeerd* |
+| GPIO10 | BIDI (SDA) | I2C1 SDA | J7 pin 4 — ICM-20948 gyroscoop/kompas | *Nog niet geïmplementeerd* |
+| GPIO11 | BIDI (SCL) | I2C1 SCL | J7 pin 3 — ICM-20948 gyroscoop/kompas | *Nog niet geïmplementeerd* |
 | GPIO12 | OUT | DIR stepper A | U1 TMC2209 pin DIR — net `Net-(U1-DIR)` | |
 | GPIO13 | OUT | STEP stepper A | U1 TMC2209 pin STEP — net `Net-(U1-STEP)` | |
 | GPIO14 | OUT | ENABLE stepper A | U1 TMC2209 pin ~ENABLE — net `Net-(U1-~{ENABLE})` | Low = ingeschakeld |
@@ -29,8 +29,8 @@
 | GPIO20 | OUT | Trigger ultrasoonsensor | J13 pin 3 — net `/Trig` | |
 | GPIO21 | — | NC | — | |
 | GPIO22 | OUT (PWM) | Servo 4 PWM (grijper) | J10 pin 1 — net `Net-(J10-Pin_1)` | Met stroombeperking via PI; stroomsensor op J10 pin 3 |
-| GPIO26 | IN (ADC0) | LDR A | J8 (JST-XH 2) — net `Net-(J8-Pin_1)` | Pull-up R29 (10 kΩ) naar 3V3; filter C13 |
-| GPIO27 | IN (ADC1) | LDR B | J9 (JST-XH 2) — net `Net-(J9-Pin_1)` | Pull-up R30 (10 kΩ) naar 3v3; filter C15 |
+| GPIO26 | IN (ADC0) | LDR A | J8 (JST-XH 2) — net `Net-(J8-Pin_1)` | Pull-up R29 (4,7 kΩ) naar 3V3; filter C13 |
+| GPIO27 | IN (ADC1) | LDR B | J9 (JST-XH 2) — net `Net-(J9-Pin_1)` | Pull-up R30 (4,7 kΩ) naar 3v3; filter C15 |
 | GPIO28 | IN (ADC2) | Stroomsensor grijper | R22 (1 kΩ) ← U3B output — net `/I_Servo` | Filter C10; zie stroomkring hieronder |
 
 ## Stepper drivers

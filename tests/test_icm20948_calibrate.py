@@ -1,16 +1,15 @@
 import machine
 import time
-from mpu9250 import MPU9250
-from ak8963 import AK8963
+from icm20948 import ICM20948
 from ssd1306 import SSD1306_I2C
 
 # --- Testscript: handmatige magnetometer-kalibratie met live weergave op OLED ---
-# GY9250 (MPU9250): GPIO10 (SDA1) / GPIO11 (SCL1) -> I2C-bus 1
+# ICM-20948:        GPIO10 (SDA1) / GPIO11 (SCL1) -> I2C-bus 1
 # OLED (SSD1306):   GPIO0  (SDA0) / GPIO1  (SCL0) -> I2C-bus 0
 #
 # Til de robot op en draai hem tijdens het meten langzaam en volledig rond
 # alle assen (net als een 8-vormige beweging). Voor een gemotoriseerde
-# variant zie test_gy9250_auto_calibrate.py
+# variant zie test_icm20948_auto_calibrate.py
 
 AANTAL = 256
 VERTRAGING_MS = 200
@@ -20,8 +19,8 @@ i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0), freq=400000)
 
 oled = SSD1306_I2C(128, 64, i2c_oled)
 
-dummy = MPU9250(i2c_sensor)  # opent de I2C-bypass naar de AK8963
-ak8963 = AK8963(i2c_sensor)
+sensor = ICM20948(i2c_sensor)  # opent ook de I2C-bypass naar de AK09916
+mag = sensor.ak09916            # ongekalibreerd: offset (0,0,0), scale (1,1,1)
 
 
 def toon(regels):
@@ -35,7 +34,7 @@ toon(["Kalibratie test", "Draai de sensor", "rond alle assen", "start over 3s...
 print("Kalibratietest: draai de sensor rond alle assen...")
 time.sleep(3)
 
-reading = ak8963.magnetic
+reading = mag.magnetic
 min_x = max_x = reading[0]
 min_y = max_y = reading[1]
 min_z = max_z = reading[2]
@@ -45,7 +44,7 @@ print(f"Kalibratie gestart ({AANTAL} metingen, {VERTRAGING_MS} ms tussenpauze)..
 try:
     for i in range(AANTAL):
         time.sleep_ms(VERTRAGING_MS)
-        mx, my, mz = ak8963.magnetic
+        mx, my, mz = mag.magnetic
 
         if mx < min_x: min_x = mx
         if mx > max_x: max_x = mx
@@ -92,7 +91,7 @@ toon([
 ])
 
 print("\n--- KALIBRATIE VOLTOOID ---")
-print("Kopieer de onderstaande regels naar uw hoofdprogramma (AK8963-constructor):")
-print(f"offset=({offset_x:.2f}, {offset_y:.2f}, {offset_z:.2f})")
-print(f"scale=({scale_x:.4f}, {scale_y:.4f}, {scale_z:.4f})")
+print("Kopieer de onderstaande regels naar uw hoofdprogramma (ICM20948-constructor):")
+print(f"mag_offset=({offset_x:.2f}, {offset_y:.2f}, {offset_z:.2f})")
+print(f"mag_scale=({scale_x:.4f}, {scale_y:.4f}, {scale_z:.4f})")
 print("---------------------------")

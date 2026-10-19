@@ -1,3 +1,5 @@
+> **Let op (DIY CAR):** deze Tuupola-driver hoort bij het oude MPU-6500-bordje ("GY-9250" zonder magnetometer). Het project stapt over op de **ICM-20948**, zie [`lib/ICM20948/`](../ICM20948/README.md). De applicatiescripts (basic, fusion, kalibratie) staan daar.
+
 # MicroPython MPU-9250 (MPU-6500 + AK8963) I2C driver
 
 MPU-9250 is a System in Package (SiP) which combines two chips: MPU-6500 which contains 3-axis gyroscope and 3-axis accelerometer and an AK8963 which is a 3-axis digital compass.

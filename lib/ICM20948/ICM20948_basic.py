@@ -2,8 +2,7 @@ import machine
 import time
 import _thread
 import math
-from mpu9250 import MPU9250
-from ak8963 import AK8963
+from icm20948 import ICM20948
 
 # Globale variabele voor de actuele, gecorrigeerde koers (heading)
 # Core 1 schrijft hier continu in, Core 0 leest dit live uit
@@ -14,17 +13,15 @@ def verwerk_kompas_core1():
     global actuele_koers
 
     # 1. Initialiseer I2C altijd BINNEN de core-functie
-    # GY9250 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
+    # ICM-20948 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
     i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 
-    # 2. VUL HIER UW EIGEN KALIBRATIERESULTATEN IN (uit Calibrate_GY9250.py):
-    dummy = MPU9250(i2c)  # opent de I2C-bypass naar de AK8963
-    ak8963 = AK8963(
+    # 2. VUL HIER UW EIGEN KALIBRATIERESULTATEN IN (uit Calibrate_ICM20948.py):
+    sensor = ICM20948(
         i2c,
-        offset=(-24.5, 12.3, -5.1),      # Hard-iron offsets (X, Y, Z)
-        scale=(0.95, 1.02, 1.03),        # Soft-iron schaling (X, Y, Z)
+        mag_offset=(-24.5, 12.3, -5.1),  # Hard-iron offsets (X, Y, Z)
+        mag_scale=(0.95, 1.02, 1.03),    # Soft-iron schaling (X, Y, Z)
     )
-    sensor = MPU9250(i2c, ak8963=ak8963)
 
     # Variabele voor het complementair filter
     # We starten op 0.0, het filter stabiliseert zichzelf snel
