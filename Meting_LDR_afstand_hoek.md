@@ -58,27 +58,27 @@ Hoek    LDRA(V) LDRB(V) hoek -  LDRA(V) LDRB(V)
 
 ## Analyse (2026-10-19)
 
-**Let op:** de pull-up (R29/R30) is **4,7 kΩ**, niet 10 kΩ zoals bovenaan staat. De spanningen hierboven zijn gemeten met `test_ldr.py` (V = ADC/65535 × 3,3), dus de weerstand is R = 4700 × V / (3,3 − V).
+**Let op:** de pull-up (R29/R30) is **47 kΩ**, niet 10 kΩ zoals bovenaan staat. De spanningen hierboven zijn gemeten met `test_ldr.py` (V = ADC/65535 × 3,3), dus de weerstand is R = 47 000 × V / (3,3 − V). Lichtbron uit: ~8–15 MΩ.
 
 ### LDR-weerstand per afstand
 
 | afstand (m) | R_A (Ω) | R_B (Ω) | R_B/R_A |
 |---|---|---|---|
-| 4 | 30 550 | 45 332 | 1,48 |
-| 3 | 19 919 | 27 612 | 1,39 |
-| 2 | 10 506 | 13 987 | 1,33 |
-| 1 | 4 013 | 4 994 | 1,24 |
-| 0,7 | 2 133 | 2 481 | 1,16 |
-| 0,5 | 1 406 | 1 605 | 1,14 |
-| 0,3 | 742 | 839 | 1,13 |
-| 0,2 | 540 | 576 | 1,07 |
-| 0,15 | 470 | 487 | 1,04 |
-| 0,1 | 540 | 505 | (bron buiten blikveld) |
-| 0,05 | 1 265 | 1 790 | (bron buiten blikveld) |
+| 4 | 305 500 | 453 300 | 1,48 |
+| 3 | 199 200 | 276 100 | 1,39 |
+| 2 | 105 100 | 139 900 | 1,33 |
+| 1 | 40 100 | 49 900 | 1,24 |
+| 0,7 | 21 300 | 24 800 | 1,16 |
+| 0,5 | 14 060 | 16 050 | 1,14 |
+| 0,3 | 7 420 | 8 390 | 1,13 |
+| 0,2 | 5 400 | 5 760 | 1,07 |
+| 0,15 | 4 700 | 4 870 | 1,04 |
+| 0,1 | 5 400 | 5 050 | (bron buiten blikveld) |
+| 0,05 | 12 650 | 17 900 | (bron buiten blikveld) |
 
 - R ∝ d^1,32 (A) en d^1,42 (B). Onder ~15 cm stijgt de weerstand weer: de bron valt buiten het blikveld. Daar de ultrasoon gebruiken.
 - De verhouding B/A is niet constant, dus een vaste gain past niet. Een machtsverband wel:
-  **ln R_B = 1,0772 · ln R_A − 0,4228** (fit 0,15–4 m, restfout ≤ 0,036 in ln R).
+  **ln R_B = 1,0772 · ln R_A − 0,6005** (fit 0,15–4 m, restfout ≤ 0,036 in ln R).
   Beste vaste gain (1,21) laat tot 0,20 restfout over.
 - Verwerkt in `config.json` → `"ldr"` (`b_gamma`, `b_ln_c`) en `lib/LDR/ldr_scan_isr.py`.
 
@@ -104,3 +104,19 @@ Richtingssignaal `ldr_diff = ln R_A − ln R_B'` (B gecorrigeerd naar A). Positi
 ### Lampbundel (kar langs de boog, laser op de bron)
 
 Deze reeks meet de lichtverdeling van de lamp, niet de LDR's: relatieve helderheid ~90 % bij ±20°, ~55 % bij ±40°, 5–15 % bij ±65°. Buiten de bundelas ontstaat ook bij recht richten een A/B-verschil (≈ 2–3° koersfout bij 30° naast de as, ≈ 7° bij 50°); de kar buigt dan iets af naar de bundelas.
+
+### Keuze pull-up: 47 kΩ tegenover 200 kΩ
+
+De resolutie is het grootst als R_LDR ≈ R_pull-up. Het meetbereik loopt van ~4,7 kΩ (15 cm) tot ~450 kΩ (4 m); 47 kΩ ligt precies op het geometrisch midden. ADC-waarden (12 bit) en codes per graad koersfout (≈ 0,045 in ln R per graad):
+
+| afstand | 47 kΩ: code | 47 kΩ: codes/graad | 200 kΩ: code | 200 kΩ: codes/graad |
+|---|---|---|---|---|
+| 0,13 m | 387 | 16 | 98 | 4 |
+| 1 m | 2 091 | 46 | 806 | 29 |
+| 4 m | 3 550 | 21 | 2 475 | 44 |
+| 15 m* | 3 989 | 5 | 3 676 | 17 |
+| 30 m* | 4 052 | 2 | 3 917 | 8 |
+
+\* geëxtrapoleerd met R ∝ d^1,32, alleen geldig in een donkere ruimte.
+
+Met 10 samples gemiddeld is de ADC-ruis ~0,8 code, dus beide waarden zijn ruim voldoende; 47 kΩ is het beste op grijpafstand, 200 kΩ boven ~2 m.

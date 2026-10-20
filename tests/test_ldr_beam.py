@@ -27,7 +27,7 @@
 # het teken kost nog een dither.
 #
 # LET OP - eenmalig te controleren:
-#   R29/R30 zijn nu 4,7 kOhm (eerder 10k -> 1k -> 10k).
+#   R29/R30 zijn nu 47 kOhm (eerder 10k -> 1k -> 10k).
 #   LDR_R_FIXED_OHM in lib/LDR/ldr_scan_isr.py MOET daarmee overeenkomen,
 #   anders zijn alle weerstandswaarden een vaste factor fout. Dit script
 #   controleert dat via controleer_config().
@@ -53,7 +53,7 @@ sys.path.append("/lib/ultrasoon")
 LDR_PIN_A = 26
 LDR_PIN_B = 27
 
-R_FIXED_VERWACHT = 4_700.0    # pull-up naar 3V3, huidige hardwarestand
+R_FIXED_VERWACHT = 47_000.0   # pull-up naar 3V3, huidige hardwarestand
 ADC_MAX = 65535.0
 
 N_SAMPLES = 10                 # gemiddeld over SAMPLE_INTERVAL_MS uit elkaar

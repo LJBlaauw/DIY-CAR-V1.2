@@ -40,20 +40,20 @@ ROT_SCALE            = 1.0
 # (zie hardware/gpio_pinout.md, R29/R30). Fel licht -> lage LDR-weerstand ->
 # lage ADC-waarde. _adc_to_res_ohm() rekent daarop.
 #
-# R29/R30: 10 kΩ -> 1 kΩ -> 10 kΩ -> nu 4,7 kΩ (zie git-historie en
-# Meting_LDR_afstand_hoek.md). Met de huidige lamp loopt de LDR van ~470 Ω
-# (15 cm) tot ~45 kΩ (4 m). De resolutie per e-voud weerstand is maximaal
-# (ADC_FS/4) als R_ldr = R_FIXED; 4,7 kΩ ligt precies op het geometrisch
-# midden van dat bereik en geeft aan BEIDE uiteinden ~340 12-bit codes per
-# e-voud. Een hogere pull-up wint op afstand weinig en verliest dichtbij
-# bijna alles (200 kΩ: ~10 codes per e-voud bij 13 cm).
-LDR_R_FIXED_OHM      = 4_700
-# Grenzen van de log-procentschaal. Onder: dichtbij komt de cel tot ~470 Ω,
-# 20 Ω geeft ruim marge. Boven: stond op 20 kΩ, waardoor beide LDR's vanaf ~2 m
-# vastklemden op 0 % en er geen richtingsinformatie meer was. 1 MΩ ligt ruim
-# boven 4 m (~45 kΩ) en net onder de donkerwaarde (~1,5 MΩ).
-LDR_R_MIN_OHM        = 20.0
-LDR_R_MAX_OHM        = 1_000_000.0
+# R29/R30: 10 kΩ -> 1 kΩ -> 10 kΩ -> nu 47 kΩ (zie git-historie en
+# Meting_LDR_afstand_hoek.md). Met de huidige lamp loopt de LDR van ~4,7 kΩ
+# (15 cm) tot ~450 kΩ (4 m). De resolutie per e-voud weerstand is maximaal
+# (ADC_FS/4) als R_ldr = R_FIXED; 47 kΩ ligt precies op het geometrisch
+# midden van dat bereik en geeft aan BEIDE uiteinden ~350-470 12-bit codes per
+# e-voud. 200 kΩ zou boven ~2 m winnen, maar bij 13 cm (grijpafstand) zakken
+# van ~350 naar ~96 codes per e-voud.
+LDR_R_FIXED_OHM      = 47_000
+# Grenzen van de log-procentschaal. Onder: gemeten minimum ~4,7 kΩ (15 cm);
+# 100 Ω laat ruim marge voor een fellere bundelas. Boven: stond op 20 kΩ,
+# waardoor de procentschaal al vlakbij vastklemde. 5 MΩ ligt ruim boven 4 m
+# (~450 kΩ, extrapolatie ~15 m) en onder de donkerwaarde (~8-15 MΩ).
+LDR_R_MIN_OHM        = 100.0
+LDR_R_MAX_OHM        = 5_000_000.0
 
 # Correctie LDR B -> LDR A (machtsverband, zie Meting_LDR_afstand_hoek.md):
 #     ln R_B = GAMMA * ln R_A + LN_C      ->   ln R_B' = (ln R_B - LN_C) / GAMMA
@@ -64,7 +64,7 @@ LDR_R_MAX_OHM        = 1_000_000.0
 # Bron: config.json, sectie "ldr"; deze waarden zijn de fallback.
 CONFIG_PATH          = "config.json"
 LDR_B_GAMMA          = 1.0772
-LDR_B_LN_C           = -0.4228
+LDR_B_LN_C           = -0.6005
 
 
 def _load_ldr_config():
