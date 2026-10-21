@@ -1317,7 +1317,7 @@ def meet_frequentie(rate=None, n_stappen=12800):
     te verifieren. Draait één motor op een vaste snelheid en klokt de tijd.
 
     Verifieer dit ook met een logic analyzer: die ziet ook de pulsbreedte
-    (verwacht 200 ns) en of er geen stappen wegvallen.
+    (verwacht 733 ns) en of er geen stappen wegvallen.
     """
     import time
     if rate is None:
