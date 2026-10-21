@@ -379,7 +379,8 @@ Valt hij tijdens de **opramp**, dan kan dat niet, om twee redenen tegelijk:
 
 ```python
 doel = approach.brake_target_cm(snelheid, object_w_cm=6.0)
-if ultrasoon.read_cm() <= doel:
+cm, kind = ultrasoon.read_cm()
+if kind == "ok" and cm <= doel:
     mv.finish()
 ```
 
@@ -400,13 +401,13 @@ import approach
 approach.finetune(ultrasoon.read_cm, object_w_cm=5.0)
 ```
 
-Zodra de arm uitklapt staan de kaken (9 cm open) in een bundel die op 12–15 cm ongeveer 8 cm breed is — de sensor kijkt dan naar de eigen vingers. **`finetune()` is dus het laatste correctiemoment**; alles daarna is open-loop, op de grijperstroomsensor na.
+Zodra de arm uitklapt staan de kaken (8,7 cm open) in een bundel die op 12–15 cm ongeveer 8 cm breed is — de sensor kijkt dan naar de eigen vingers. **`finetune()` is dus het laatste correctiemoment**; alles daarna is open-loop, op de grijperstroomsensor na.
 
 `mean_dist_cm()` wacht 60 ms tussen metingen, want `ultrasoon.INTERVAL_MS` is 50 ms: lees je sneller, dan krijg je dezelfde gebufferde waarde terug en doet het gemiddelde niets.
 
 ### Grijpergeometrie
 
-De kaken sluiten horizontaal, maar de toppen bewegen naar voren: `tip_pos_cm(o) = 12 + (9 − o) × 3/7`. Daaruit volgen drie dingen:
+De kaken sluiten horizontaal, maar de toppen bewegen naar voren: `tip_pos_cm(o) = 12 + (8,7 − o) × 3/6,7`. Daaruit volgen drie dingen:
 
 | Objectbreedte | `stop_dist_cm()` | `grip_window_cm()` | `lateral_tolerance_cm()` |
 |---|---|---|---|
@@ -462,7 +463,8 @@ hc = HeadingController(ldr_diff=mijn_ldr_verschil,
 mv = sr.drive(200, 19.1, correction=hc)      # de controller zelf, niet hc.output
 doel = approach.brake_target_cm(19.1)
 while mv.service():
-    if ultrasoon.read_cm() <= doel:
+    cm, kind = ultrasoon.read_cm()
+    if kind == "ok" and cm <= doel:
         mv.finish()
     time.sleep_ms(10)
 ```

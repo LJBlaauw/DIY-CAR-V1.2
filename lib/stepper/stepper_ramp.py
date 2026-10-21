@@ -785,7 +785,8 @@ def stopping_distance_cm(speed_cm_s=V_MAX_CM_S, accel=ACCEL_CM_S2):
     OP de doelafstand, dan schiet je er met deze afstand voorbij:
 
         doel = geometry.STOP_DIST_CM + stopping_distance_cm(snelheid)
-        if ultrasoon.read_cm() <= doel:
+        cm, kind = ultrasoon.read_cm()
+        if kind == "ok" and cm <= doel:
             mv.finish()
 
     Bij 19,1 cm/s is dit ~4,4 cm; bij 5 cm/s nog maar ~0,5 cm. Rem daarom voor

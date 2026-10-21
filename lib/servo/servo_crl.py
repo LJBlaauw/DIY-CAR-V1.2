@@ -101,7 +101,7 @@ class ServoController:
         self.vref = 3.3
         self.adc_max = 65535.0
         self.shunt = 0.1     # ohm
-        self.gain = 14.0     # opamp versterking
+        self.gain = 13.0     # niet-inverterend: 1 + 47 kOhm / 3,9 kOhm = 13,05
         # extra software-EMA op stroom
         self.ema_alpha = 0.2
         self.i_filt_mA = 0.0
@@ -394,5 +394,5 @@ class ServoController:
 
     def adc_to_current_mA(self, raw_u16):
         v = (raw_u16 / self.adc_max) * self.vref
-        i_a = v / (self.shunt / self.gain)
+        i_a = v / (self.shunt * self.gain)
         return i_a * 1000.0

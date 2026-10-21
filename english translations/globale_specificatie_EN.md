@@ -40,7 +40,7 @@ High numerical resolution is not automatically the same quantity as physical acc
 | Laser (cross hair) | 1 | — | GPIO15 via MOSFET |
 | OLED | 1 | SSD1306 | I2C0: SDA=GPIO0, SCL=GPIO1 |
 | Gyroscope/compass | 1 | GY9250 | I2C1: SDA=GPIO10, SCL=GPIO11 — *software provided (`lib/GY9250`, fusion, stepper link); integration and hardware calibration not yet validated* |
-| Current sensor gripper | — | 0.1 Ω shunt + op amp (gain 14×) | ADC2 = GPIO28 |
+| Current sensor gripper | — | 0.1 Ω shunt + op amp (gain 13×; nominally 13.05×) | ADC2 = GPIO28 |
 | LED | 1 | WS2812B | GPIO6 |
 | WiFi/Bluetooth | 1 | Infineon CYW43439 (onboard Pico 2 W) | internal board connection |
 
@@ -413,7 +413,7 @@ The final rest positions are set automatically or manually and stored in `config
 | `close()` | Disable all PWM and remove IRQ |
 
 **Current control servo 4 (gripper):**
-- Shunt: 0.1 Ω, op amp gain 14×, measured on ADC2 (GPIO28).
+- Shunt: 0.1 Ω, non-inverting op amp gain 13.05× (13.0 in software), measured on ADC2 (GPIO28).
 - EMA filter (α=0.2) on the measured current.
 - SETPOINT mode: PI adjusts position so that current remains at setpoint.
 - LIMIT mode: position is leading; PI limiter pulls back if current exceeds limit.
@@ -445,57 +445,37 @@ The ldr scan routine now uses its own PIO block (SM8, see table above) instead o
 
 ### `lib/LDR/ldr_scan_isr.py`
 
-LDR scan module. Runs the cart via `stepper.rotate()`, samples LDR A and B synchronously with a PIO clock (SM8 / PIO2 SM0) via ISR.
+LDR scan module. It rotates the car through 370° using `stepper.rotate()` and samples LDR A and B through PIO2 SM0 (logical SM8).
 
-**Status: still contains known bugs — under development.**
+**Status:** revised algorithm implemented; hardware validation remains.
 
-**Scan algorithm (revised):**
+**Current scan algorithm:**
 
-1. **Full rotation scan (370°).** Rotate 370° in one direction and sample both LDRs separately. No pre-roll/reverse: a full rotation always contains the maximum and the 10° overlap keeps a peak around 0°/360° from the edge. The 0–10° region appears twice in the buffer; `_find_peak` takes the first (earliest) index.
-- *Precondition:* the cart must be able to rotate freely on its axis (differential, `WHEEL_BASE_CM`) without cables that twist at 360°+.
-2. **Coarse peak determination per LDR.** The LDRs are horizontally spaced, so two brightness maxima arise; the direction of the source is at the **intersection A ≈ B** (after gain correction), not at the maximum of the sum. See also the “Driving to the Light Source” section.
-3. **Shortest way back (idea 2).** After 370° the cart is at the end angle 370°; to peak angle θ is turning back `370 − θ` and turning `(θ − 10) mod 360`. Choose the smallest. Always let the last degrees end in the same direction (e.g. always in the scanning direction; when turning back, go a little past and then go back forward), so that the backlash is constant and calibrated.
-4. **Closed-loop end position via null-seek A−B (idea 3).** Rough to the expected peak position in steps (open-loop), then adjust in small steps with `measure_now()`. Do not use the stored maximum magnitude as a threshold (the motion scan smears the peak, and the absolute brightness may have drifted in the meantime), but look for the zero crossing of the difference A−B (after gain correction):
-- The difference signal is sharper than the flat sum peak → better angular resolution.
-- It is insensitive to absolute brightness drift (if the light dims, the sum drops but the zero remains at the same angle).
-- Limit the fine adjustment to a window around the expected position (e.g. ±15°); If you do not find a clear zero crossing within the window, fall back on the step target. This prevents running away due to light changes/noise.
-This corrects stepper slip: the cart turns until the LDRs actually measure the aligned condition, not to a counted step count.
+1. One continuous 370° scan without pre-roll.
+2. LDR A and B are processed separately. The target is the brightest calibrated A−B zero crossing, not the maximum of their sum.
+3. From the 370° end position the shortest route to the target is selected. A reverse return overshoots by up to 2° and finishes in the scan direction to take up backlash consistently.
+4. A bounded closed-loop null seek uses fresh `measure_diff()` readings in 1° steps over at most ±15°. If no crossing is found, the car returns to the coarse step target.
+5. SM8 samples every 1 ms. Ten A/B/stepper-position samples are maintained in preallocated ring buffers with running sums. Each stored scan point uses the LDR average and average stepper position from the same 10 ms window, preventing filter delay from becoming an angle offset.
 
-**Config:**
-- `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
-- `WHEEL_BASE_CM = 13,6 cm` — center-to-center track width, for degrees→cm conversion. **Standed at 18.5 cm**, while the measured track width is 13.6 cm; a commanded 370° scan actually rotated **503°**. Must remain the same as `TRACK_WIDTH` in `stepper_ramp.py`; empirical correction (tyre scrub, backlash) belongs in `ROT_SCALE`.
-- **[CONFIG]** `LDR_R_FIXED_OHM = 1000` — pull-up to 3V3 (R29/R30). **Was 10 000.** For a 100–200 Ω LDR, 10 kΩ gives approximately **0.99–1.96% full-scale** (approx. 41–80 true 12-bit counts); 1 kΩ gives approximately **9.1–16.7% full-scale** (approx. 372–683 real 12-bit counts). MicroPython `read_u16()` scales this raw ADC value to 16 bits, so 12-bit ADC counts and `read_u16()` counts should not be used interchangeably.
-- **[CONFIG]** `LDR_R_MIN_OHM = 20` — percent scale lower limit. **Was 60**, causing the scale close to the source to be stuck at 100% and leaving the end stage with no information.
-- **[CONFIG]** `LDR_R_MAX_OHM = 20 000` — unchanged. Over 20 Ω … 20 kΩ the resolution remains 79–1024 actual codes per e-fold, so the entire operating range from 5 m to 5 cm is usable.
-- **[TO CALIBRATE]** `LDR_GAIN_B = 1,136` — current calibration factor for differential measurement. **Needs to be recalibrated**: This factor also compensated for the tolerance of the old 10 kΩ resistor pair.
-- `TARGET_SAMPLES_PER_DEG = 3` — at 370° ≈ 1110 samples. The scan maintains three `array`s of 1110 words (LDR A, LDR B, stepper mode), together ~13 KB; well within RAM.
+**Important configuration:**
 
-**Divider topology:** `R_FIXED` is the **pull-up** to 3V3, the LDR the pull-down to GND. Bright light → low LDR resistance → **low** ADC value. `_adc_to_res_ohm()` is counting on that. Check: Shine light on LDR A and read the raw ADC; if it goes to **zero**, then the assumption is correct.
+- `WHEEL_BASE_CM = 13.6`
+- `LDR_R_FIXED_OHM = 47_000`
+- `LDR_R_MIN_OHM = 100`
+- `LDR_R_MAX_OHM = 5_000_000`
+- `LDR_B_GAMMA = 1.0772`, `LDR_B_LN_C = -0.6005`
+- `TARGET_SAMPLES_PER_DEG = 3` (approximately 1110 stored points)
 
 **Public functions:**
 
 | Function | Description |
 |---|---|
-| `scan(dir, speed_cm_s, graden, start_graden, go_max, excel, out_csv)` | Run scan. Returns dict with results and peak position |
-| `measure_now(n=8)` | Directly read LDR value (%, tuple A/B) |
-| `attach_stepper_reader(fn)` | Link stepper.pio_pos1 as position source for the scan |
+| `scan(dir, speed_cm_s, graden=370, start_graden=0, go_max=True, excel=True, out_csv=...)` | Run the filtered 370° scan and optionally align |
+| `measure_now(n=10, interval_ms=1)` | Blocking 10 ms LDR average |
+| `enable_irq_timing(True/False)` / `irq_timing_stats()` | Optional ISR execution-time measurement |
+| `attach_stepper_reader(fn)` | Attach `stepper.pio_pos1` as scan position source |
 
-**`scan()` returns:**
-```python
-{
-  'samples': int,        # aantal gemeten samples
-  'tick_ms': int,        # gebruikte sample-interval
-  'est_time_s': float,   # geschatte scanduur
-  'total_deg': float,
-  'dist_cm': float,
-  'peak_index': int,     # index of light maximum
-  'peak_percent': float, # lichtsterkte op maximum (%)
-  's1_at_peak': int,     # stapperstand op maximum
-  'backtrack': dict,     # terugrijinformatie
-  'csv_path': str,       # path to CSV (None if not written)
-  'csv_error': str,      # error message (None if OK)
-}
-```
+`scan()` returns the sampling settings (`sample_ms`, `average_samples`, `output_interval_ms`), optional `irq_timing`, the alignment result, both LDR peak indices, return-path and null-seek information, and CSV status.
 
 ---
 
@@ -614,7 +594,7 @@ For comparison: halving the gap gains a factor of 2, halving the ultrasonic erro
 - **`γ` (LDR exponent) and `w` (beam half angle) must be measured** — both are in each formula above. See [`tests/test_ldr_beam.py`](tests/test_ldr_beam.py). The current `w ≈ 33°` comes from one measurement point with an *assumed* `γ = 0,7`; With `γ = 0,9` the beam is wider, with `γ = 0,5` it is narrower.
 - **LDR gain calibration** (sensitivity difference A/B); without that correction the cart will steer crookedly.
 - **Odometry Calibration** (`WHEEL_CIRC`, `TRACK_WIDTH`).
-- **Hardware/code link:** after lowering R29/R30 to **1 kΩ**, `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) must also become 1000. If it remains at 10000, then each resistance value is a factor of 10 error without anything failing. With a 100 Ω LDR, the signal with 1 kΩ is at **9.1%** of the ADC scale instead of 0.99% — a factor of **9.2** (see the numbers at `LDR_R_FIXED_OHM` above). More important than the level is the sensitivity: the `y` measurement should see a ΔQ of ~0.01, which at 1 kΩ is about **38 u16 LSBs** versus ~4.5 LSBs at 10 kΩ — a factor of 8.4. With 10 kΩ this disappears into the noise.
+- **Hardware/code link:** R29/R30 and `LDR_R_FIXED_OHM` are now **47 kΩ**. `LDR_R_MIN_OHM = 100` and `LDR_R_MAX_OHM = 5 MΩ`; verify ADC resolution and saturation on hardware with the current light source.
 - `LDR_R_MIN_OHM` is now at **20 Ω** (was 60 Ω). For the beam axis calculation and final phase, working in `ln R` is preferable to a truncated percent scale; check on hardware whether 20 Ω gives sufficient margin against saturation.
 - **Grey filter** over the gap when the LDR physically saturates (100 Ω is very low for CdS). No diffuser and no smaller opening — they ruin the directivity.
 - **Arbitration with the compass:** during the approach, the **LDR is leading** for the direction; the gyro-Z only does interference suppression (so it is not dual control). The **magnetometer** is not used while driving because the stepper motors disturb the field; that is for the return journey, where an absolute course is needed.
@@ -633,7 +613,7 @@ The jaws close **horizontally**, but the fingertips move forwards**. Measured:
 | almost closed | 2cm | 15cm |
 
 ```
-tip_pos_cm(opening) = 12 + (9 − opening) × 3/7        →  0.43 cm forward per cm of closing
+tip_pos_cm(opening) = 12 + (8.7 − opening) × 3/6.7        →  0.43 cm forward per cm of closing
 ```
 
 > This is a **straight through two measuring points**. A four-bar mechanism actually produces a curve; one additional measurement at ~5 cm opening shows how much this differs.
@@ -740,7 +720,7 @@ Web server based on **microdot** (asyncio) with a web socket, so that the cart c
 
 ## Known issues / TODO
 
-- [ ] `lib/LDR/ldr_scan_isr.py` — implement revised scan algorithm: 370° scan (no pre-roll), peak at A≈B intersection instead of sum-maximum, shortest path back, and closed-loop alignment via null seek at A−B
+- [x] `lib/LDR/ldr_scan_isr.py` — revised scan algorithm implemented: 370° scan without pre-roll, brightest A≈B crossing, shortest return with consistent backlash approach, bounded closed-loop null seek, and 10×1ms ring averaging. Hardware validation remains.
 - [ ] Gyroscope/compass (GY9250) — basic and fusion code is present; still testing integration, sign convention, bias, magnetometer calibration and hardware behavior with running stepper motors.
 - [ ] OLED (SSD1306) — integration not yet implemented; proposal is in `te doen.md`.
 - [x] GPIO table checked and verified against KiCad netlist V1.2 (see [hardware/gpio_pinout.md](hardware/gpio_pinout_EN.md))
@@ -757,8 +737,8 @@ Web server based on **microdot** (asyncio) with a web socket, so that the cart c
 - [ ] **Verify divider topology on hardware once:** shine light on LDR A and read the raw ADC. If it goes to zero, then `_adc_to_res_ohm()` is correct; if it goes to 65535, the entire scale is reversed and the formula must become `R_FIXED × (65535 − adc)/adc`.
 - [ ] **Recheck 370° scan** with the corrected `WHEEL_BASE_CM`. While previous scans were empirically tuned to 18.5, peak positions now deviate.
 - [ ] **Measure `γ` and `w`** with `tests/test_ldr_beam.py` (`gamma()` and `bundel()`). Both constants are included in every `y` calculation; the current `w ≈ 33°` comes from one measurement point with an assumed `γ = 0,7`.
-- [ ] **Cut light source slit in half — preliminary design proposal for objects wider than 4 cm.** The gripper only tolerates ±(9 − width)/2 cm lateral deviation, and the current beam achieves ≈ ±2 cm. Set the slit **vertically** (narrow horizontally). First run `bundel()`, then adjust, then check whether the 370° scan still finds the source from the actual starting position.
-- [x] Lateral tolerance of the gripper determined: **±(9 − object width)/2 cm**. See *Gripper geometry and end positioning*.
+- [ ] **Cut light source slit in half — preliminary design proposal for objects wider than 4 cm.** The gripper only tolerates ±(8.7 − width)/2 cm lateral deviation, and the current beam achieves ≈ ±2 cm. Set the slit **vertically** (narrow horizontally). First run `bundel()`, then adjust, then check whether the 370° scan still finds the source from the actual starting position.
+- [x] Lateral tolerance of the gripper determined: **±(8.7 − object width)/2 cm**. See *Gripper geometry and end positioning*.
 - [ ] **Measure jaw depth** (palm to fingertips). This sets the actual lower limit of the grab window; now kept conservatively at 12 cm, which makes each window ~2 cm too narrow.
 - [ ] **Third measuring point of the gripper** at ~5 cm opening. `tip_pos_cm()` is now a straight line through two points; a four-bar mechanism produces a curve.
 - [ ] **Extend arm above the object and then lower it**, instead of sweeping forward horizontally. Prevents a jaw from knocking over the object in the event of a lateral deviation. Requires a coordinated movement of servo 1 and 2.

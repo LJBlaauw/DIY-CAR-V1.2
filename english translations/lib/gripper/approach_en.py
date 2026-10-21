@@ -24,15 +24,25 @@ def mean_dist_cm(read_cm, n=8, wacht_ms=60):
     wacht_ms must be greater than ultrasoon.INTERVAL_MS (50 ms), otherwise you
     read the same buffered measurement multiple times and the averaging does nothing.
 
-    Returns None if no single measurement was usable.
+    Accepts either a distance/None or the tuple (distance, status) returned by
+    ultrasoon.read_cm(). Only status "ok" is included. Returns None if no
+    measurement was usable.
     """
     import time
     som, tel = 0.0, 0
     for i in range(n):
         if i:
             time.sleep_ms(wacht_ms)
-        d = read_cm()
-        if d and d > 0:
+        measurement = read_cm()
+        if isinstance(measurement, tuple):
+            if len(measurement) < 2:
+                continue
+            d, status = measurement[0], measurement[1]
+            if status != "ok":
+                continue
+        else:
+            d = measurement
+        if d is not None and d > 0:
             som += d
             tel += 1
     return (som / tel) if tel else None
@@ -90,7 +100,8 @@ def brake_target_cm(speed_cm_s, object_w_cm=None):
     the target distance:
 
         target = brake_target_cm(speed)
-        if ultrasoon.read_cm() <= target:
+        cm, kind = ultrasoon.read_cm()
+        if kind == "ok" and cm <= target:
             mv.finish()
 
     NOT included: the measurement latency of the ultrasonic sensor itself (INTERVAL_MS = 50 ms,

@@ -40,7 +40,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | Laser (kruishaar) | 1 | — | GPIO15 via MOSFET |intesity: PWM |
 | OLED | 1 | SSD1306 | I2C0: SDA=GPIO0, SCL=GPIO1 |Oled 126x64 pixels 0.96 inch |
 | Gyroscoop/accelerometer/magnetometer | 1 | **ICM-20948** (besteld; vervangt het MPU-6500-bordje) | I2C1: SDA=GPIO10, SCL=GPIO11. Adres 0x69 (AD0 hoog) of 0x68 (AD0 laag), driver zoekt zelf; magnetometer AK09916 op 0x0C via I2C-bypass. Driver `lib/ICM20948/icm20948.py`; controle bij levering met `tests/test_icm20948_i2c_scan.py` (verwacht WHO_AM_I `0xEA`, AK09916 `0x48`/`0x09`) |
-| Stroomsensor grijper | — | 0,1 Ω shunt + opamp (gain 14×) | ADC2 = GPIO28 |
+| Stroomsensor grijper | — | 0,1 Ω shunt + opamp (gain 13×; nominaal 13,05×) | ADC2 = GPIO28 |
 | LED | 1 | WS2812B | GPIO6 |type:multicoler 1 wire |
 | WiFi/Bluetooth | 1 | Infineon CYW43439 (onboard Pico 2 W) | interne boardverbinding |
 
@@ -453,7 +453,8 @@ Bron: [`config.json`](config.json) (sectie `"servo"`). `lib/servo/servo_crl.py` 
 | `close()` | Deinit alle PWM en verwijder IRQ |
 
 **Stroomregeling servo 4 (grijper):**
-- Shunt: 0,1 Ω, opamp gain 14×, gemeten op ADC2 (GPIO28).
+- Shunt: 0,1 Ω, niet-inverterende opamp gain `1 + 47 kΩ / 3,9 kΩ = 13,05×` (in software 13,0×), gemeten op ADC2 (GPIO28).
+- Terugrekening: `I = V_ADC / (R_shunt × gain)`; bij 1 A is `V_ADC ≈ 1,3 V`.
 - EMA-filter (α=0,2) op de gemeten stroom.
 - SETPOINT-modus: PI stuurt positie bij zodat stroom op setpoint blijft.
 - LIMIT-modus: positie is leidend; PI-limiter trekt terug als stroom de limiet overschrijdt.
@@ -489,11 +490,11 @@ De ldr-scan routine gebruikt inmiddels een eigen PIO-blok (SM8, zie tabel hierbo
 
 LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B synchroon met een PIO-klok (SM8 / PIO2 SM0) via ISR.
 
-**Status: bevat nog bekende fouten — in ontwikkeling.**
+**Status: herzien algoritme geïmplementeerd; nog op hardware verifiëren.**
 
 **Scan-algoritme (herzien):**
 
-1. **Volledige-omwentelingsscan (370°).** Draai in één richting 370° en sample beide LDR's apart. Geen pre-roll/terugdraaien vooraf: een volle omwenteling bevat altijd het maximum en de 10° overlap houdt een piek rond 0°/360° van de rand af. De 0–10° regio komt twee keer in de buffer voor; `_find_peak` neemt de eerste (vroegste) index.
+1. **Volledige-omwentelingsscan (370°).** Draai in één richting 370° en sample beide LDR's apart. Geen pre-roll/terugdraaien vooraf: een volle omwenteling bevat altijd het maximum en de 10° overlap houdt een piek rond 0°/360° van de rand af. De 0–10° regio komt twee keer in de buffer voor; de helderste geldige A−B-nuldoorgang wordt gekozen.
    - *Randvoorwaarde:* de kar moet vrij op zijn as kunnen draaien (differentieel, `WHEEL_BASE_CM`) zonder kabels die bij 360°+ mee-twisten.
 2. **Grove piekbepaling per LDR.** De LDR's staan horizontaal uit elkaar, dus er ontstaan twee helderheidsmaxima; de richting van de bron ligt op het **kruispunt A ≈ B** (na gain-correctie), niet op het maximum van de som. Zie ook de "Rijden naar de lichtbron"-sectie.
 3. **Kortste weg terug (idee 2).** Na 370° staat de kar op eindhoek 370°; naar piekhoek θ is terugdraaien `370 − θ` en doordraaien `(θ − 10) mod 360`. Kies de kleinste. Laat de laatste graden altijd in dezelfde richting eindigen (bv. altijd in scan-richting; bij terugdraaien iets voorbij en dan vooruit terug), zodat de backlash constant en kalibreerbaar is.
@@ -511,7 +512,7 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 - **[CONFIG]** `LDR_R_MAX_OHM = 5 000 000` — **was 20 000**, waardoor de procentschaal al vlakbij vastklemde (4 m ≈ 300–450 kΩ). 5 MΩ ligt ruim boven 4 m (extrapolatie ~15 m) en onder de donkerwaarde (~8–15 MΩ).
 - **[GEKALIBREERD 2026-10-19]** `LDR_B_GAMMA = 1,0772`, `LDR_B_LN_C = −0,6005` (ook in `config.json` → `"ldr"`) — vervangen de vaste `LDR_GAIN_B = 1,136`. Cel B wordt naar cel A omgerekend met een machtsverband: `ln R_B' = (ln R_B − LN_C) / GAMMA`. De cellen verschillen in helling, niet in een vaste factor: de beste vaste gain liet op 0,15–4 m tot 0,20 restfout in ln R over (~5° koersfout), de machtscorrectie 0,036 (~1°). Meetdata en analyse: [`Meting_LDR_afstand_hoek.md`](Meting_LDR_afstand_hoek.md).
 - **Richtingssignaal** `ldr_diff = ln R_A − ln R_B'` (`diff_from_adc()`, `measure_diff()`, `read_synced_diff()`): positief = bron rechts (B is de rechter cel), dus `LDR_DIFF_SIGN = +1`. Op 0,5 m: ±0,02 bij 1°, ±0,2 bij 5°, ±0,75 bij 10°, ±1,4 bij 15°; monotoon tot ±15°, teken klopt tot ±25°. Bewust geen (A−B)/(A+B), die explodeert als beide cellen donker zijn.
-- `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 samples. De scan houdt drie `array`'s van 1110 woorden aan (LDR A, LDR B, stapperstand), samen ~13 KB; ruim binnen RAM.
+- `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 opgeslagen scanpunten. De drie resultaatarrays gebruiken samen ~13 KB; de drie 10-elements-ringbuffers voegen circa 80 bytes toe.
 
 **Fysieke montage (gemeten, 2026-09-19):**
 - LDR's zitten **55 mm boven de grond**, **40 mm uit elkaar** in het horizontale vlak (zie ook punt 2 hierboven, "LDR's staan horizontaal uit elkaar"). De **laser (kruishaar) zit precies in het midden** tussen de twee LDR's.
@@ -523,7 +524,7 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 **Delertopologie:** `R_FIXED` is de **pull-up** naar 3V3, de LDR de pull-down naar GND. Fel licht → lage LDR-weerstand → **lage** ADC-waarde. `_adc_to_res_ohm()` rekent daarop. Controle: schijn licht op LDR A en lees de ruwe ADC; gaat die naar **nul**, dan is de aanname juist.
 
-**100Hz-netrimpel:** een LED-lamp op 230V AC geeft rimpel op de gemeten LDR-spanning met een periode van 10 ms. `measure_now()` en de metingen in `tests/test_ldr_beam.py`/`tests/test_ldr.py` middelen daarom **10 samples, 1 ms uit elkaar** — 10 ms = precies één netperiode, dus de rimpel heft zichzelf op in het gemiddelde. De ISR-sampling tijdens `scan()` (`LDR_SAMPLES_PER_TICK` in `_on_pio_irq`) kan dit **niet** toepassen: die loopt in een hardware-IRQ die niet mag blokkeren, dus die samples volgen elkaar in microseconden op en middelen de netrimpel niet weg. Dat is in de praktijk geen probleem voor de piekbepaling over een hele sweep, maar wel relevant voor een losse, nauwkeurige aflezing — gebruik daarvoor `measure_now()`.
+**100Hz-netrimpel:** een 230V-ledlamp geeft voornamelijk 100Hz-rimpel (periode circa 10 ms). `measure_now()` middelt daarom 10 samples met 1 ms tussenruimte. De bewegende `scan()` gebruikt nu hetzelfde tijdvenster zonder te blokkeren: SM8 triggert iedere 1 ms, waarna een vooraf gealloceerde ringbuffer van tien A/B/stepperposities met lopende sommen wordt bijgewerkt. Ieder opgeslagen scanpunt bevat het gemiddelde van de laatste tien LDR-samples én de gemiddelde stepperpositie uit exact hetzelfde venster. De filtergroepsvertraging van circa 4,5 ms wordt daardoor niet als hoekverschuiving geïnterpreteerd. De 1kHz-data worden met een fase-accumulator gedecimeerd naar circa drie opgeslagen punten per graad, zodat het RAM-gebruik rond 1110 scanpunten blijft.
 
 **Fase-gesynchroniseerde achtergrond-sampling (alternatief voor `measure_now()`):**
 
@@ -537,8 +538,9 @@ Implementatie: `ServoController.attach_tick_callback(fn)` (`lib/servo/servo_crl.
 
 | Functie | Beschrijving |
 |---|---|
-| `scan(dir, speed_cm_s, graden, start_graden, go_max, excel, out_csv)` | Voer scan uit. Retourneert dict met resultaten en piekpositie |
+| `scan(dir, speed_cm_s, graden=370, start_graden=0, go_max=True, excel=True, out_csv=...)` | 370°-scan met 1kHz-sampling, 10×1ms-ringgemiddelde en uitlijning op A−B=0 |
 | `measure_now(n=10, interval_ms=1)` | Direct LDR-waarde lezen (%, tuple A/B), 1 ms-gemiddeld tegen 100Hz-netrimpel (blokkerend, ~10 ms) |
+| `enable_irq_timing(True/False)` / `irq_timing_stats()` | Meet optioneel de ISR-uitvoeringstijd; gemiddelde tijd in µs gedeeld door 10 is het CPU-percentage bij 1 kHz |
 | `start_synced_sampling(servo_controller)` / `stop_synced_sampling(...)` | Koppel/ontkoppel LDR-sampling aan de 50Hz-servo-PWM-tick |
 | `read_synced()` | Niet-blokkerend: laatste fase-gesynchroniseerde LDR-waarde (%, tuple A/B), max ~20 ms oud |
 | `attach_stepper_reader(fn)` | Koppel stepper.pio_pos1 als positiebron voor de scan |
@@ -546,17 +548,22 @@ Implementatie: `ServoController.attach_tick_callback(fn)` (`lib/servo/servo_crl.
 **`scan()` retourneert:**
 ```python
 {
-  'samples': int,        # aantal gemeten samples
-  'tick_ms': int,        # gebruikte sample-interval
-  'est_time_s': float,   # geschatte scanduur
-  'total_deg': float,
+  'samples': int,                 # aantal gemeten samples
+  'sample_ms': 1,                  # vaste ADC-sampleperiode
+  'average_samples': 10,           # ringvenster van 10 ms
+  'output_interval_ms': float,     # interval tussen opgeslagen scanpunten
+  'irq_timing': dict,              # optionele ISR-duurmeting
+  'est_time_s': float,            # geschatte scanduur
+  'total_deg': 370.0,
   'dist_cm': float,
-  'peak_index': int,     # index van lichtmaximum
-  'peak_percent': float, # lichtsterkte op maximum (%)
-  's1_at_peak': int,     # stapperstand op maximum
-  'backtrack': dict,     # terugrijinformatie
-  'csv_path': str,       # pad naar CSV (None als niet geschreven)
-  'csv_error': str,      # foutmelding (None als ok)
+  'alignment': dict,              # bron, nuldoorgang en beide LDR-piekindices
+  'alignment_angle_deg': float,   # grove richting binnen 0..360 graden
+  'peak_a_index': int,
+  'peak_b_index': int,
+  'backtrack': dict,              # kortste route + backlash-benadering
+  'null_seek': dict,              # resultaat begrensde closed-loop fijnregeling
+  'csv_path': str,
+  'csv_error': str,
 }
 ```
 
@@ -678,8 +685,8 @@ Ter vergelijking: de spleet halveren wint een factor 2, de ultrasoonfout halvere
   **Constructie (gemeten):** de lichtspleet is **verticaal, 8 mm breed**, met de LED's **~8 mm achter het front**. Een zuivere geometrische aperture-inschatting voor een puntbron op die diepte (`atan(halve breedte / diepte) = atan(4/8) ≈ 26,6°` halfhoek) ligt merkbaar smaller dan de gemeten ~45°, dus de LED's stralen zelf al breder uit dan de spleet minimaal zou toelaten — de spleet vignetteert gedeeltelijk, maar is niet de enige beperkende factor. **[TE VERIFIËREN]** Een scherpe "90° en dan donker"-overgang past eigenlijk beter bij een (deels) aperture-gedomineerd, hard afgekapt profiel dan bij de nu aangenomen **Gaussische** bundelvorm (`exp(-(φ/w)²)`), die per definitie geleidelijk uitdooft en nooit echt "donker" wordt. Dit is een aanwijzing dat het Gaussische model bij grote hoeken kan afwijken van de werkelijkheid, ook al is het dichtbij de as (waar de kar meestal werkt) waarschijnlijk een goede benadering — pas te beoordelen met een echte `bundel()`-meting.
 - **LDR-gain-kalibratie** (gevoeligheidsverschil A/B) — **gedaan 2026-10-19** met een machtscorrectie, zie `LDR_B_GAMMA`.
 - **Odometriekalibratie** (`WHEEL_CIRC`, `TRACK_WIDTH`).
-- **Hardware/code-koppeling:** R29/R30 zijn nu **47 kΩ** (eerder 10 kΩ → 1 kΩ → 10 kΩ), en `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) en `config.json` staan op 47 000. Oude toelichting: Blijft die op 1000 staan terwijl de hardware op 10 kΩ zit, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt — `tests/test_ldr_beam.py` z'n `controleer_config()` vangt dat verschil af. **[TE VERIFIËREN]** de gevoeligheidszorg die destijds tot de stap naar 1 kΩ leidde: de `y`-meting moet een ΔQ van ~0,01 zien, wat met 1 kΩ ongeveer **38 u16-LSB's** was tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Of de nieuwe, fellere lichtbron dat verschil compenseert (hoger signaalniveau, dus effectief meer LSB's per ΔQ) moet nog op hardware bevestigd worden. De 1 ms-gemiddelde sampling in `measure_now()` (zie boven) onderdrukt alleen de 100Hz-netrimpel, niet deze ADC-quantisatiegrens.
-- `LDR_R_MIN_OHM` staat nu op **20 Ω** (was 60 Ω). Voor de bundelasberekening en eindfase heeft werken in `ln R` de voorkeur boven een afgekapte procentschaal; controleer op hardware of 20 Ω voldoende marge tegen verzadiging geeft.
+- **Hardware/code-koppeling:** R29/R30 zijn nu **47 kΩ** (eerder 10 kΩ → 1 kΩ → 10 kΩ), en `LDR_R_FIXED_OHM` in [`lib/LDR/ldr_scan_isr.py`](lib/LDR/ldr_scan_isr.py) en `config.json` staan op 47 000. Oude toelichting: Blijft die op 1000 staan terwijl de hardware op 10 kΩ zit, dan is elke weerstandswaarde een factor 10 fout zonder dat iets faalt — `tests/test_ldr_beam.py` z'n `controleer_config()` vangt dat verschil af. **[TE VERIFIËREN]** de gevoeligheidszorg die destijds tot de stap naar 1 kΩ leidde: de `y`-meting moet een ΔQ van ~0,01 zien, wat met 1 kΩ ongeveer **38 u16-LSB's** was tegen ~4,5 LSB's met 10 kΩ — een factor 8,4. Of de nieuwe, fellere lichtbron dat verschil compenseert (hoger signaalniveau, dus effectief meer LSB's per ΔQ) moet nog op hardware bevestigd worden. De 10×1ms-middeling in `measure_now()` en `scan()` (zie boven) onderdrukt alleen de 100Hz-netrimpel, niet deze ADC-quantisatiegrens.
+- `LDR_R_MIN_OHM` staat nu op **100 Ω**; dit laat ruime marge onder het gemeten minimum van ~4,7 kΩ zonder de procentschaal vroeg af te kappen.
 - **Grijsfilter** over de opening als de LDR fysiek verzadigt (100 Ω is erg laag voor CdS). Geen diffusor en geen kleinere opening — die verpesten de richtingsgevoeligheid.
 - **Arbitrage met het kompas:** tijdens de nadering is de **LDR leidend** voor de richting; de gyro-Z doet alleen storingsonderdrukking (dat is dus geen dubbele besturing). De **magnetometer** wordt tijdens het rijden níet gebruikt omdat de stappenmotoren het veld verstoren; die is voor de terugweg, waar een absolute koers nodig is.
 
@@ -744,7 +751,7 @@ tip_pos_cm(opening) = 12 + (8,7 − opening) × 3/6,7      →  ~0,45 cm vooruit
 
 #### De ultrasoon is alleen bruikbaar met de arm in rust
 
-Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan **achter** de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is zuiver. Bij een halve openingshoek van 15° is die bundel 6,4 cm breed op 12 cm en **8 cm breed op 15 cm**, en de kaken staan 9 cm open — **zodra de arm uitklapt kijkt de sensor dus naar de eigen vingers.** Vanaf dat moment is er geen afstandsterugkoppeling meer.
+Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan **achter** de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is zuiver. Bij een halve openingshoek van 15° is die bundel 6,4 cm breed op 12 cm en **8 cm breed op 15 cm**, en de kaken staan 8,7 cm open — **zodra de arm uitklapt kijkt de sensor dus naar de eigen vingers.** Vanaf dat moment is er geen afstandsterugkoppeling meer.
 
 #### Drie afgeleide grootheden
 
@@ -846,7 +853,7 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 
 ## Bekende issues / TODO
 
-- [ ] `lib/LDR/ldr_scan_isr.py` — herzien scan-algoritme implementeren: 370°-scan (geen pre-roll), piek op A≈B-kruispunt i.p.v. som-maximum, kortste weg terug, en closed-loop uitlijnen via null-seek op A−B
+- [x] `lib/LDR/ldr_scan_isr.py` — herzien scan-algoritme geïmplementeerd: 370°-scan (geen pre-roll), helderste A≈B-kruispunt i.p.v. som-maximum, kortste weg terug met vaste backlash-benadering, en begrensde closed-loop null-seek op A−B. Nog op hardware verifiëren.
 - [x] **Gyroscoop/kompas (GY9250) hardwarevalidatie (2026-09-19) — negatief resultaat.** I2C-scan (`tests/test_gy9250_i2c_scan.py`) laat zien dat de AK8963-magnetometer nooit op de bus verschijnt; whoami van de accel/gyro-chip is `0x70` ("standalone MPU6500"), een echte MPU-9250 geeft `0x71`. **Huidig bordje heeft dus geen magnetometer.** Gyro/accelerometer werken wél (worden al gebruikt in `stepper_ramp.py`). Besluit: vervangend bordje bestellen.
 - [x] **Vervanger: ICM-20948 besteld (2026-10-19)** in plaats van een MPU-9250 (die is end-of-life en wordt veel nagemaakt). Code omgezet: nieuwe driver `lib/ICM20948/icm20948.py` met dezelfde API als de Tuupola-driver (`acceleration`, `gyro` in rad/s, `magnetic` in µT, `temperature`, `whoami`); basic/fusion/kalibratiescripts en tests hernoemd naar `ICM20948`/`test_icm20948_*`. Kalibratiewaarden gaan nu als `mag_offset=`/`mag_scale=` naar de `ICM20948`-constructor. De magnetometerassen worden in de driver uitgelijnd op die van accel/gyro (X gelijk, Y en Z omgekeerd volgens datasheet), wat de kantelcompensatie in `fusion.py` nodig heeft.
 - [ ] Na levering ICM-20948: `tests/test_icm20948_i2c_scan.py` draaien (WHO_AM_I `0xEA`, `0x0c` na bypass, AK09916 `0x48`/`0x09`). Daarna: asuitlijning van de magnetometer controleren (kop naar het noorden en 90° draaien → koers verandert ~90° in dezelfde richting als de geïntegreerde gyro-Z), `GYRO_Z_SIGN` opnieuw verifiëren (andere chip/montage), bias, magnetometerkalibratie en hardwaregedrag met draaiende stappenmotoren.
@@ -859,9 +866,9 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [ ] `lib/stepper/stepper_ramp.py` op hardware testen: `MOTOR_TURN_SIGN` / `GYRO_Z_SIGN` / `LDR_DIFF_SIGN`, `CYCLES_FIXED` met een logic analyzer, maximale startsnelheid en versnelling meten, regelversterkingen `kp_ldr`/`kp_gyro` afstemmen. Daarna beslissen of `stepper.py` vervalt.
 - [ ] **Odometriekalibratie** — afstandsschaal (`WHEEL_CIRC`) en rotatieschaal (`TRACK_WIDTH`) opnemen in de kalibratiesessie. Zonder deze stuurt de kar structureel scheef.
 - [ ] Rijden-naar-licht: de segmentgewijze aanpak is **vervangen** door de doorlopende kruisfase met bijsturing per slice in `stepper_ramp.py`, plus positioneren op de **bundelas** via de genormaliseerde helderheid `Q`. Zie de sectie *Rijden naar de lichtbron*.
-- [x] `LDR_R_MIN_OHM` naar 20 in `lib/LDR/ldr_scan_isr.py`. Delertopologie gedocumenteerd in de code.
-- [x] `LDR_R_FIXED_OHM`: 10 000 → 1000 (voor resolutie op de bundelas) → **weer 10 000**, na het terugzetten van R29/R30 naar 10 kΩ met de nieuwe, fellere lichtbron. `tests/test_ldr_beam.py` (`controleer_config()`) waarschuwt als code en hardware uit elkaar lopen.
-- [x] `measure_now()` en de metingen in `tests/test_ldr_beam.py`/`tests/test_ldr.py` middelen nu **10 samples, 1 ms uit elkaar** tegen de 100Hz-netrimpel van de LED-lichtbron (10 ms = één netperiode). Geldt niet voor de ISR-sampling in `scan()`, die niet mag blokkeren.
+- [x] `LDR_R_MIN_OHM` uiteindelijk naar 100 in `lib/LDR/ldr_scan_isr.py`. Delertopologie gedocumenteerd in de code.
+- [x] `LDR_R_FIXED_OHM`: 10 000 → 1000 (voor resolutie op de bundelas) → **weer 10 000**, na het terugzetten van R29/R30 naar 10 kΩ met de nieuwe, fellere lichtbron. Later vervangen door **47 000** na de definitieve meting. `tests/test_ldr_beam.py` (`controleer_config()`) waarschuwt als code en hardware uit elkaar lopen.
+- [x] `measure_now()` en de bewegende `scan()` middelen nu **10 samples, 1 ms uit elkaar** tegen de 100Hz-netrimpel van de LED-lichtbron; `scan()` doet dit niet-blokkerend met een ringbuffer en koppelt elk gemiddelde aan de gemiddelde stepperpositie van hetzelfde venster.
 - [x] **Fase-gesynchroniseerde achtergrond-sampling toegevoegd:** `ServoController.attach_tick_callback()` (`lib/servo/servo_crl.py`, GPIO5-IRQ omgezet van falling naar **rising** edge) plus `start_synced_sampling()`/`read_synced()` in `lib/LDR/ldr_scan_isr.py`. Zie *Rijden naar de lichtbron* → Fase-gesynchroniseerde achtergrond-sampling.
 - [ ] **Op hardware verifiëren:** dat `attach_tick_callback()` de servo-timing niet meetbaar verstoort (de callback loopt vóór `micropython.schedule()` in dezelfde harde IRQ); dat er geen ADC-mux-conflict optreedt als `read_synced()`-sampling en een actieve `scan()` elkaar toch overlappen; en of de aanname "statische bias, verwaarloosbare drift binnen één rijsegment" in de praktijk klopt (zie de kanttekening bij servo-PWM-klok vs. 230V-net-fase in de LDR-sectie).
 - [x] `WHEEL_BASE_CM` in `ldr_scan_isr.py` gecorrigeerd van 18,5 naar 13,6 cm — een 370°-scan draaide in werkelijkheid 503°.
@@ -871,8 +878,8 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 - [ ] **Delertopologie eenmalig verifiëren op hardware:** schijn licht op LDR A en lees de ruwe ADC. Gaat die naar nul, dan is `_adc_to_res_ohm()` juist; gaat die naar 65535, dan loopt de hele schaal omgekeerd en moet de formule `R_FIXED × (65535 − adc)/adc` worden.
 - [ ] **370°-scan opnieuw controleren** met de gecorrigeerde `WHEEL_BASE_CM`. Waren eerdere scans empirisch afgestemd op 18,5, dan wijken piekposities nu af.
 - [ ] **`γ` en `w` meten** met `tests/test_ldr_beam.py` (`gamma()` en `bundel()`). Beide constanten zitten in élke `y`-berekening; de huidige `w ≈ 33°` komt uit één meetpunt met een aangenomen `γ = 0,7`.
-- [ ] **Spleet lichtbron halveren — voorlopig ontwerpvoorstel voor voorwerpen breder dan 4 cm.** De grijper verdraagt maar ±(9 − breedte)/2 cm laterale afwijking, en de huidige bundel haalt ≈ ±2 cm. Zet de spleet **verticaal** (smal horizontaal). Eerst `bundel()` draaien, dan aanpassen, dan controleren of de 370°-scan de bron nog vindt vanaf de werkelijke startpositie.
-- [x] Laterale tolerantie van de grijper vastgesteld: **±(9 − objectbreedte)/2 cm**. Zie *Grijpergeometrie en eindpositionering*.
+- [ ] **Spleet lichtbron halveren — voorlopig ontwerpvoorstel voor voorwerpen breder dan 4 cm.** De grijper verdraagt maar ±(8,7 − breedte)/2 cm laterale afwijking, en de huidige bundel haalt ≈ ±2 cm. Zet de spleet **verticaal** (smal horizontaal). Eerst `bundel()` draaien, dan aanpassen, dan controleren of de 370°-scan de bron nog vindt vanaf de werkelijke startpositie.
+- [x] Laterale tolerantie van de grijper vastgesteld: **±(8,7 − objectbreedte)/2 cm**. Zie *Grijpergeometrie en eindpositionering*.
 - [ ] **Kaakdiepte opmeten** (palm t.o.v. vingertoppen). Die zet de werkelijke ondergrens van het grijpvenster; nu conservatief op 12 cm gehouden, wat elk venster ~2 cm te smal maakt.
 - [ ] **Derde meetpunt van de grijper** bij ~5 cm opening. `tip_pos_cm()` is nu een rechte door twee punten; een vierstangenmechanisme geeft een kromme.
 - [ ] **Arm uitklappen boven het voorwerp en dan laten zakken**, in plaats van horizontaal naar voren vegen. Voorkomt dat een kaak het voorwerp omstoot bij een laterale afwijking. Vraagt een gecoördineerde beweging van servo 1 en 2. **Mechanische randvoorwaarde (2026-09-19, gebruiker):** staat servo 1 (schouder) in rust, dan maakt servo 2 (elleboog) al bij **meer dan ca. 30°** vanuit zíjn rust contact met het controlbord (PCB) — een harde fysieke botsing, geen timingkwestie. Veilige volgorde: J1 eerst weg van rust, pas dan J2 bewegen; bij het terugkeren J2 eerst terug naar rust (J1 nog weg van rust = veilig), J1 pas daarna. Geldt voor de **toestand** (welke servo waar staat), niet alleen voor de volgorde van bewegen — J1 mag dus nooit in rust staan terwijl J2 >30° van zijn rust af staat, in geen enkele fase van een gecoördineerde beweging. Geïmplementeerd in `tests/test_servo.py`. Servo 4 (grijper) heeft eigen, andere beperkingen (open/dicht-bereik, stroomlimiet) en zit niet in deze botsingsketen.

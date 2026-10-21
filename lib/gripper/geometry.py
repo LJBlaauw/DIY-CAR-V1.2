@@ -8,7 +8,7 @@
 # geen hardware, geen imports — zodat hij overal en ook op de PC te testen is.
 #
 # De kaken sluiten HORIZONTAAL, maar de vingertoppen bewegen daarbij naar VOREN.
-# Gemeten: maximaal open (9 cm) -> toppen 12 cm vóór de ultrasoon;
+# Gemeten: maximaal open (8,7 cm) -> toppen 12 cm vóór de ultrasoon;
 #          bijna dicht  (2 cm) -> toppen 15 cm vóór de ultrasoon.
 #
 # LET OP: tip_pos_cm() is een RECHTE door die twee meetpunten. Een
@@ -17,7 +17,7 @@
 #
 # Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan ACHTER
 # de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is dan zuiver.
-# Zodra de arm uitklapt staan de kaken (9 cm open) in een bundel die op 12-15 cm
+# Zodra de arm uitklapt staan de kaken (8,7 cm open) in een bundel die op 12-15 cm
 # ongeveer 8 cm breed is -> vanaf dat moment kijkt de sensor naar de eigen
 # vingers en is er GEEN terugkoppeling meer.
 # ================================================================

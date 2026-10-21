@@ -379,7 +379,8 @@ If he falls during the **ramp**, that is not possible, for two reasons at the sa
 
 ```python
 doel = approach.brake_target_cm(snelheid, object_w_cm=6.0)
-if ultrasoon.read_cm() <= doel:
+cm, kind = ultrasoon.read_cm()
+if kind == "ok" and cm <= doel:
     mv.finish()
 ```
 
@@ -400,13 +401,13 @@ import approach
 approach.finetune(ultrasoon.read_cm, object_w_cm=5.0)
 ```
 
-As soon as the arm unfolds, the jaws (9 cm open) are in a bundle that is approximately 8 cm wide at 12–15 cm — the sensor then looks at your own fingers. **`finetune()` is therefore the last correction moment**; everything after that is open-loop, except for the gripper current sensor.
+As soon as the arm unfolds, the jaws (8.7 cm open) are in a bundle that is approximately 8 cm wide at 12–15 cm — the sensor then looks at your own fingers. **`finetune()` is therefore the last correction moment**; everything after that is open-loop, except for the gripper current sensor.
 
 `mean_dist_cm()` waits 60 ms between measurements, because `ultrasoon.INTERVAL_MS` is 50 ms: if you read faster, you get the same buffered value back and the average does nothing.
 
 ### Gripper geometry
 
-The jaws close horizontally, but the tips move forward: `tip_pos_cm(o) = 12 + (9 − o) × 3/7`. Three things follow from this:
+The jaws close horizontally, but the tips move forward: `tip_pos_cm(o) = 12 + (8.7 − o) × 3/6.7`. Three things follow from this:
 
 | Object width | `stop_dist_cm()` | `grip_window_cm()` | `lateral_tolerance_cm()` |
 |---|---|---|---|
@@ -462,7 +463,8 @@ hc = HeadingController(ldr_diff=mijn_ldr_verschil,
 mv = sr.drive(200, 19.1, correction=hc)      # the controller itself, not hc.output
 doel = approach.brake_target_cm(19.1)
 while mv.service():
-    if ultrasoon.read_cm() <= doel:
+    cm, kind = ultrasoon.read_cm()
+    if kind == "ok" and cm <= doel:
         mv.finish()
     time.sleep_ms(10)
 ```

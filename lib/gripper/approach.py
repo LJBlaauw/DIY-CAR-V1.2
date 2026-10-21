@@ -24,15 +24,25 @@ def mean_dist_cm(read_cm, n=8, wacht_ms=60):
     wacht_ms moet groter zijn dan ultrasoon.INTERVAL_MS (50 ms), anders lees je
     dezelfde gebufferde meting meerdere keren en doet het gemiddelde niets.
 
-    Geeft None als geen enkele meting bruikbaar was.
+    Accepteert zowel een afstand/None als ultrasoon.read_cm()'s tuple
+    (afstand, status). Alleen status "ok" telt mee. Geeft None als geen enkele
+    meting bruikbaar was.
     """
     import time
     som, tel = 0.0, 0
     for i in range(n):
         if i:
             time.sleep_ms(wacht_ms)
-        d = read_cm()
-        if d and d > 0:
+        meting = read_cm()
+        if isinstance(meting, tuple):
+            if len(meting) < 2:
+                continue
+            d, status = meting[0], meting[1]
+            if status != "ok":
+                continue
+        else:
+            d = meting
+        if d is not None and d > 0:
             som += d
             tel += 1
     return (som / tel) if tel else None
@@ -90,7 +100,8 @@ def brake_target_cm(speed_cm_s, object_w_cm=None):
     de doelafstand:
 
         doel = brake_target_cm(snelheid)
-        if ultrasoon.read_cm() <= doel:
+        cm, kind = ultrasoon.read_cm()
+        if kind == "ok" and cm <= doel:
             mv.finish()
 
     NIET meegerekend: de meetlatentie van de ultrasoon zelf (INTERVAL_MS = 50 ms,

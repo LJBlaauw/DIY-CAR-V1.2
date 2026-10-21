@@ -53,7 +53,7 @@ ldr.attach_stepper_reader(stepper.pio_pos1)
 print(ldr.measure_now())
 print('start scan')
 
-res = ldr.scan('l', 5.0, 100.0, start_graden=10.0,
+res = ldr.scan('l', 5.0,
                go_max=True,
                excel=True,
                out_csv="/scan.csv")
