@@ -315,6 +315,7 @@ Als globale **snelheids-override** (alles langzamer, bv. bij een obstakel) blijf
 | `s1(dir, speed, dist)` / `s2(...)` | Idem, één motor |
 | `rotate(dir, speed, dist)` | Draai op de as, `dist` = booglengte per wiel in cm |
 | `rotate_deg(graden, speed)` | Draai op de as over een hoek. Positief = rechts |
+| `rotate_deg_gyro(graden, gyro_rate, speed=5)` | Draai op de as, gestuurd op de **gyro** (`gyro_rate = gyro_z_deg_s(sensor)`). Remt op de gyrohoek met een onderweg geleerde ondergrondfactor `k` en corrigeert daarna langzaam tot ±0,5°. Nodig omdat de stappenhoek afhangt van ondergrond en draairichting: `rotate_deg(360)` gaf op gladde vloer 311–370°, op een ruwe mat 335°. Getest 2026-10-21 op gladde vloer: ±360° met fout 0,33/0,38° (laser 3 mm / 6 mm op 50 cm). Blokkeert ~8,5 s per 360° bij 5 cm/s |
 | `drive(dist, speed, correction=fn)` | Beweging **met** doorlopende bijsturing; geeft een `Move` terug |
 | `adrive(...)` | asyncio-variant van `drive()` |
 | `Move.service()` | Vul de FIFO's bij en pas de correctie toe. ≥1× per 10 ms aanroepen. `False` = klaar |

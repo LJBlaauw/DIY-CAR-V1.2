@@ -728,6 +728,107 @@ def rotate_deg(degrees, speed=V_MAX_CM_S / 2):
     return _launch(_turn_dirs(degrees >= 0), _check_pos(speed, "speed"), n)
 
 
+def rotate_deg_gyro(degrees, gyro_rate, speed=5.0, tol_deg=0.5,
+                    max_corrections=3, corr_speed=2.0, bias=None):
+    """Draai op de as over een hoek, gestuurd op de GYRO i.p.v. op stappen.
+
+    Waarom: de stappen-naar-graden-omrekening hangt af van de ondergrond en de
+    draairichting (gemeten 2026-10-21, 360° rotate_deg bij 5 cm/s): gladde vloer
+    rechtsom 0,86-1,0 en linksom 1,02-1,03 door een haperend zwenkwiel na een
+    richtingswissel, op een ruwe mat 0,93 in beide richtingen.
+
+    gyro_rate: callable in graden/s, positief = rechts (gyro_z_deg_s(sensor)).
+    bias:      gyro-offset in graden/s; None = 0,3 s meten (kar moet stilstaan).
+
+    1. Start rotate_deg() met 50% overmaat en integreer de gyro.
+    2. Leer onderweg k = gyrohoek / stappenhoek (de ondergrondfactor) en roep
+       brake() aan zodra de resterende hoek gelijk is aan de remhoek
+       (remweg van de wielen x k, plus één regelperiode latentie).
+    3. Na stilstand: bij |fout| > tol_deg een langzame correctie (corr_speed,
+       vrijwel zonder ramp) die op de gyro met halt() stopt, max. max_corrections.
+
+    Blokkeert tot de kar stilstaat. Geeft dict(target, gyro, error, k,
+    corrections, bias) terug.
+    """
+    import time
+    if not _is_number(degrees) or degrees - degrees != 0:
+        raise ValueError("degrees moet een eindig getal zijn, kreeg %r" % (degrees,))
+    if degrees == 0:
+        return dict(target=0.0, gyro=0.0, error=0.0, k=None, corrections=0, bias=bias)
+
+    if bias is None:
+        som, n, t0 = 0.0, 0, time.ticks_ms()
+        while time.ticks_diff(time.ticks_ms(), t0) < 300:
+            som += gyro_rate(); n += 1
+            time.sleep_ms(3)
+        bias = som / n
+
+    deg_per_cm = 2.0 * RAD_TO_DEG / TRACK_WIDTH_EFF   # stappenhoek per wiel-cm
+    yaw = 0.0
+    tp = time.ticks_us()
+
+    def integreer():
+        nonlocal yaw, tp
+        now = time.ticks_us()
+        w = gyro_rate() - bias
+        yaw += w * time.ticks_diff(now, tp) * 1e-6
+        tp = now
+        return w
+
+    def wacht_stil(timeout_ms=3000):
+        t0 = time.ticks_ms(); rust = None
+        while time.ticks_diff(time.ticks_ms(), t0) < timeout_ms:
+            w = integreer()
+            if not busy() and abs(w) < 1.0:
+                if rust is None:
+                    rust = time.ticks_ms()
+                elif time.ticks_diff(time.ticks_ms(), rust) > 150:
+                    return
+            else:
+                rust = None
+            time.sleep_ms(3)
+
+    # --- 1+2: hoofdbeweging met remmen op de gyro -----------------------
+    sgn = 1.0 if degrees > 0 else -1.0
+    h0 = heading()
+    rotate_deg(degrees * 1.5, speed)
+    v = speed
+    v0 = V_START_CM_S
+    k = 1.0
+    remweg_deg = (v * v - v0 * v0) / (2.0 * ACCEL_CM_S2) * deg_per_cm
+    tp = time.ticks_us()
+    while busy():
+        w = integreer()
+        stappen = heading() - h0
+        if abs(stappen) > 15.0:
+            k = yaw / stappen
+        rest = sgn * (degrees - yaw)
+        if rest <= remweg_deg * k + abs(w) * 0.006:
+            brake()
+            break
+        time.sleep_ms(2)
+    wacht_stil()
+
+    # --- 3: langzame correcties, stoppen met halt() op de gyro ---------
+    n_corr = 0
+    while abs(degrees - yaw) > tol_deg and n_corr < max_corrections:
+        fout = degrees - yaw
+        s = 1.0 if fout > 0 else -1.0
+        rotate_deg(fout * 2.0 / max(k, 0.5), corr_speed)
+        tp = time.ticks_us()
+        while busy():
+            w = integreer()
+            if s * (degrees - yaw) <= abs(w) * 0.006:
+                halt()
+                break
+            time.sleep_ms(2)
+        wacht_stil()
+        n_corr += 1
+
+    return dict(target=degrees, gyro=yaw, error=degrees - yaw, k=k,
+                corrections=n_corr, bias=bias)
+
+
 # ----------------------------------------------------------------
 # Eindpositionering — het laatste correctiemoment
 # ----------------------------------------------------------------
