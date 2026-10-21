@@ -85,13 +85,15 @@ _EXEC_PUSH      = rp2.asm_pio_encode("push()", 0)
 # ----------------------------------------------------------------
 @asm_pio(sideset_init=PIO.OUT_LOW, out_shiftdir=PIO.SHIFT_RIGHT)
 def ramp_stepper():
-    # 7 instructies. Valt na de laatste jmp door en wrapt automatisch naar 0.
+    # 8 instructies. Valt na de laatste jmp door en wrapt automatisch naar 0.
     pull(block)             .side(0)        # type: ignore  stalt hier met STEP laag
     out(y, 16)              .side(0)        # type: ignore  y = repeat-1
     out(x, 16)              .side(0)        # type: ignore  x = delay
     mov(isr, x)             .side(0)        # type: ignore  delay bewaren (ISR = kladregister)
     label("pulse")                          # type: ignore
-    mov(x, isr)             .side(1)  [2]   # type: ignore  STEP hoog 3 cycles = 200 ns @15 MHz
+    mov(x, isr)             .side(1)  [7]   # type: ignore  STEP hoog: 8 cycles ...
+    nop()                   .side(1)  [2]   # type: ignore  ... + 3 = 11 cycles = 733 ns @15 MHz (zoals stepper.py;
+                                            #   200 ns liet de TMC2209 ~40% van de pulsen missen)
     label("wait")                           # type: ignore
     jmp(x_dec, "wait")      .side(0)        # type: ignore  STEP laag, delay uitlopen
     jmp(y_dec, "pulse")                     # type: ignore  volgende stap in dit segment
@@ -115,15 +117,15 @@ def step_counter():
 # Constanten — ongewijzigd t.o.v. V1
 # ----------------------------------------------------------------
 F_PIO         = 15_000_000   # 150 MHz sysclk / 10 -> integer klokdeler, geen fractionele jitter
-CYCLES_FIXED  = 5            # vaste cycles PER STAP binnen een segment:
-                             #   mov(x, isr)[2]      = 3
+CYCLES_FIXED  = 13           # vaste cycles PER STAP binnen een segment:
+                             #   mov(x, isr)[7] + nop()[2] = 11 (STEP hoog)
                              #   jmp(x_dec, "wait")  = delay + 1  (bij x == 0 wordt de
                              #                         instructie nog één keer uitgevoerd
                              #                         zonder te springen)
                              #   jmp(y_dec, "pulse") = 1
-                             #   -> stapperiode = delay + 5 cycles
+                             #   -> stapperiode = delay + 13 cycles
                              # NIET meegerekend: 4 cycles PER SEGMENT voor pull/out/out/mov.
-                             # De effectieve overhead is dus 5 + 4/repeat. Bij de 256
+                             # De effectieve overhead is dus 13 + 4/repeat. Bij de 256
                              # rampsegmenten (~22 stappen) is dat 0,18 cycle op ~1000
                              # (0,02%); bij segmenten van 1 stap 0,4%.
                              # BEREKEND, nog niet gemeten. TE VERIFIEREN met een logic

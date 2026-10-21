@@ -68,14 +68,17 @@ def ramp_stepper():
 | 1 | `out(y, 16)` | laagste 16 bits → Y = `repeat − 1` (shift-richting is RIGHT) | 1 |
 | 2 | `out(x, 16)` | hoogste 16 bits → X = delay | 1 |
 | 3 | `mov(isr, x)` | delay opzij zetten in ISR. **ISR is hier kladregister**, geen invoer-FIFO — autopush staat uit. Nodig omdat X straks wordt leeggeteld en er maar twee scratchregisters zijn. | 1 |
-| 4 | `mov(x, isr) [2]` | STEP **hoog**, delay uit ISR terughalen. `[2]` maakt de puls 3 cycles = **200 ns** bij 15 MHz, ruim boven het TMC2209-minimum van ~100 ns en breed genoeg voor de teller-SM. | 3 |
-| 5 | `jmp(x_dec, "wait")` | STEP **laag**, X aftellen. Springt naar zichzelf, dus dit is de delaylus. | delay + 1 |
-| 6 | `jmp(y_dec, "pulse")` | volgende stap in dit segment; is Y op, dan valt hij door en **wrapt automatisch naar 0** voor het volgende segment. | 1 |
+| 4 | `mov(x, isr) [7]` | STEP **hoog**, delay uit ISR terughalen. | 8 |
+| 5 | `nop() [2]` | STEP blijft **hoog**. Samen met #4 is de puls 11 cycles = **733 ns** bij 15 MHz, net als in `stepper.py`. Eén instructie kan met side-set maximaal `[7]` vertraging hebben, daarom twee. | 3 |
+| 6 | `jmp(x_dec, "wait")` | STEP **laag**, X aftellen. Springt naar zichzelf, dus dit is de delaylus. | delay + 1 |
+| 7 | `jmp(y_dec, "pulse")` | volgende stap in dit segment; is Y op, dan valt hij door en **wrapt automatisch naar 0** voor het volgende segment. | 1 |
 
-**Vaste overhead per stap = 3 + 1 + 1 = 5 cycles.** Dat is `CYCLES_FIXED`, en daarom geldt:
+**Waarom 733 ns en niet 200 ns:** de oorspronkelijke puls van 3 cycles (200 ns) zit op papier ruim boven het TMC2209-minimum van ~100 ns, maar in de praktijk miste de driver ~40 % van de pulsen: `rotate_deg(+90)` draaide 54° volgens de gyro, terwijl de PIO-teller (die de eigen pin leest) wel alle 5927 pulsen telde. Met 733 ns: 90,8°. Gemeten 2026-10-21.
+
+**Vaste overhead per stap = 8 + 3 + 1 + 1 = 13 cycles.** Dat is `CYCLES_FIXED`, en daarom geldt:
 
 ```
-delay = round(F_PIO / stapfrequentie) − 5
+delay = round(F_PIO / stapfrequentie) − 13
 ```
 
 Let op: dat is de overhead *binnen* een segment. Bij elke **segmentovergang** komen daar de vier instructies 0–3 (`pull`/`out`/`out`/`mov`) bij, en die zitten niet in de formule. De effectieve overhead is dus:
@@ -506,7 +509,7 @@ Daarnaast als regressie, omdat elk van deze drie eerder fout was:
 | `MOTOR_TURN_SIGN` (+1 / −1) | `rotate_deg(+90)` moet de kar naar **rechts** draaien; `heading()` moet daarna ≈ +90 geven |
 | `GYRO_Z_SIGN` (+1 / −1) | opgeheven wielen: draai de kar met de hand naar rechts, `gyro_z_deg_s(sensor)()` moet **positief** zijn |
 | `LDR_DIFF_SIGN` (+1 / −1) | houd een lamp rechts van de kar; `ldr_diff()` moet **positief** zijn |
-| `CYCLES_FIXED = 5` (+ 4/segment) | `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`. Meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, zodat de per-segment overhead zichtbaar wordt. Controleer met een logic analyzer ook de pulsbreedte (verwacht 200 ns) en of er stappen wegvallen |
+| `CYCLES_FIXED = 13` (+ 4/segment) | `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`. Meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, zodat de per-segment overhead zichtbaar wordt. Controleer met een logic analyzer ook de pulsbreedte (verwacht 733 ns) en of er stappen wegvallen |
 | Startsnelheid en max. versnelling | met de ICM-20948 als onafhankelijke referentie — de PIO-teller kan een stall niet zien |
 | `kp_ldr`, `kp_gyro` | de standaard `kp_ldr = 25` geeft bij een vol LDR-verschil 25 °/s, net onder het plafond van 32,2 °/s, dus de regelaar verzadigt normaal niet |
 | Odometriekalibratie | 1,00 m rijden (`WHEEL_CIRC`) en 360° draaien (`TRACK_WIDTH`) |
