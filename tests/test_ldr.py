@@ -5,13 +5,17 @@ from ssd1306 import SSD1306_I2C
 # --- Testscript: LDR (gemeten spanningen) ---
 # LDR A / LDR B: GPIO26 / GPIO27 (moet overeenkomen met ldr_scan_isr)
 # OLED (SSD1306): GPIO0 (SDA0) / GPIO1 (SCL0) -> I2C-bus 0
+# Laser:          GPIO15 -> BS170 MOSFET, tijdens de test 100% aan
 #
 # De LED-lamp (230V AC) geeft 100Hz rimpel op de gemeten spanning. Om die
 # weg te middelen wordt elke 1 ms een sample genomen en uitgemiddeld over
 # 10 samples: 10 x 1 ms = 10 ms = precies één 100Hz-periode, dus de rimpel
 # heft zichzelf op in het gemiddelde.
-laser=Pin(15, Pin.OUT)
-laser.on()
+#
+# De laser staat de hele test 100% aan: GPIO15 als gewone digitale uitgang
+# (hoog = MOSFET volledig open), dus zonder de 50Hz-PWM van servo_crl die
+# anders ook in de LDR-meting zou doorkomen. Bij stoppen gaat de laser uit.
+LASER_PIN = 15
 LDR_PIN_A = 26
 LDR_PIN_B = 27
 
@@ -26,6 +30,8 @@ oled = SSD1306_I2C(128, 64, i2c_oled)
 
 adc_a = ADC(LDR_PIN_A)
 adc_b = ADC(LDR_PIN_B)
+
+laser = Pin(LASER_PIN, Pin.OUT, value=1)  # 100% aan
 
 
 def toon(regels):
@@ -51,8 +57,8 @@ def lees_gemiddeld(adc_a, adc_b, n=SAMPLES, interval_ms=SAMPLE_INTERVAL_MS):
     return som_a / n, som_b / n
 
 
-toon(["LDR test", f"pin A={LDR_PIN_A} B={LDR_PIN_B}", "start over 2s..."])
-print(f"LDR test: gemeten spanningen op GPIO{LDR_PIN_A} / GPIO{LDR_PIN_B}")
+toon(["LDR test", f"pin A={LDR_PIN_A} B={LDR_PIN_B}", "laser 100% aan", "start over 2s..."])
+print(f"LDR test: gemeten spanningen op GPIO{LDR_PIN_A} / GPIO{LDR_PIN_B}, laser (GPIO{LASER_PIN}) 100% aan")
 time.sleep(2)
 
 print("Test gestart. Ctrl-C om te stoppen.")
@@ -68,10 +74,14 @@ try:
             "Gemeten spanning:",
             f"A: {v_a:5.2f} V",
             f"B: {v_b:5.2f} V",
+            "Laser: 100%",
         ])
 
         print(f"LDR A: {v_a:.3f} V   LDR B: {v_b:.3f} V")
         time.sleep_ms(200)
 except KeyboardInterrupt:
-    toon(["LDR test", "Gestopt."])
-    print("Test gestopt.")
+    pass
+finally:
+    laser.off()
+    toon(["LDR test", "Gestopt.", "laser uit"])
+    print("Test gestopt, laser uit.")
