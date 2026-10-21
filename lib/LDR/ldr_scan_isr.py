@@ -145,6 +145,14 @@ _irq_last_us = 0
 _irq_max_us = 0
 _irq_total_us = 0
 _irq_count = 0
+# Tijd TUSSEN opeenvolgende ISR-starts. De PIO-tick is exact 1 ms, maar de
+# handler is soft (via micropython.schedule): bezette hoofdlus, GC of andere
+# geschedulede IRQ's laten hem later starten (gap_max_us) of ticks wegvallen.
+# Gemiste ticks = verstreken tijd in ms + 1 - aantal ISR-aanroepen; een tick
+# die alleen laat komt (gat 1,6 ms, daarna 0,4 ms) telt dus niet als gemist.
+_irq_first_us = -1
+_irq_prev_us = -1
+_gap_max_us = 0
 
 _idx = 0
 _tick_counter = 0
@@ -264,11 +272,21 @@ def _on_pio_irq(sm):
     global _ring_sum_a, _ring_sum_b, _ring_sum_pos
     global _store_interval_us, _store_phase_us, _idx, _tick_counter, _segment_done
     global _irq_last_us, _irq_max_us, _irq_total_us, _irq_count
+    global _irq_first_us, _irq_prev_us, _gap_max_us
 
     if _tick_counter <= 0:
         return
 
-    t0 = time.ticks_us() if _irq_timing_enabled else 0
+    t0 = 0
+    if _irq_timing_enabled:
+        t0 = time.ticks_us()
+        if _irq_prev_us >= 0:
+            gap = time.ticks_diff(t0, _irq_prev_us)
+            if gap > _gap_max_us:
+                _gap_max_us = gap
+        else:
+            _irq_first_us = t0
+        _irq_prev_us = t0
     i = _ring_index
     new_a = _adc_a.read_u16()
     new_b = _adc_b.read_u16()
@@ -315,20 +333,30 @@ def enable_irq_timing(enabled=True):
     """Schakel ISR-duurmeting in/uit; reset statistiek bij inschakelen."""
     global _irq_timing_enabled, _irq_last_us, _irq_max_us
     global _irq_total_us, _irq_count
+    global _irq_first_us, _irq_prev_us, _gap_max_us
     _irq_timing_enabled = bool(enabled)
     if enabled:
         _irq_last_us = 0
         _irq_max_us = 0
         _irq_total_us = 0
         _irq_count = 0
+        _irq_first_us = -1
+        _irq_prev_us = -1
+        _gap_max_us = 0
 
 
 def irq_timing_stats():
-    """Retourneer last/max/average in us en CPU-aandeel bij een 1ms-tick."""
+    """Retourneer ISR-duur (last/max/avg in us), CPU-aandeel bij een 1ms-tick,
+    het grootste gat tussen twee ISR-starts en het aantal gemiste ticks."""
     avg = (_irq_total_us / _irq_count) if _irq_count else None
+    missed = None
+    if _irq_count:
+        span_ms = time.ticks_diff(_irq_prev_us, _irq_first_us) / 1000.0
+        missed = max(0, int(span_ms + 0.5) + 1 - _irq_count)
     return dict(enabled=_irq_timing_enabled, count=_irq_count,
                 last_us=_irq_last_us, max_us=_irq_max_us, avg_us=avg,
-                cpu_percent=(avg / 10.0) if avg is not None else None)
+                cpu_percent=(avg / 10.0) if avg is not None else None,
+                gap_max_us=_gap_max_us, missed_ticks=missed)
 
 # =========================
 #  KOPPELINGEN + TESTMETING
@@ -660,16 +688,29 @@ def _fine_null_seek(stepper_mod, speed_cm_s):
 
 
 def _write_csv(path, PCT_A, PCT_B, AVG, DIFF, STEP):
-    """Schrijf CSV met ; als scheidingsteken (Nederlands Excel-formaat)."""
-    try:
-        with open(path, "w") as f:
-            f.write("index;ldr_a_pct;ldr_b_pct;avg_pct;ldr_diff;stepper_stappen\n")
-            for i in range(len(AVG)):
-                f.write("{};{:.1f};{:.1f};{:.1f};{:.6f};{}\n".format(
-                    i + 1, PCT_A[i], PCT_B[i], AVG[i], DIFF[i], STEP[i]))
-        return True, None
-    except Exception as e:
-        return False, e
+    """Schrijf CSV met ; als scheidingsteken (Nederlands Excel-formaat).
+
+    Na een scan staan er ~1100 floats per lijst op de heap. Twee keer (van ~25
+    pogingen, 2026-10-21) gaf het schrijven toen "memory allocation failed,
+    allocating 1148 bytes" bij >250 kB vrij; oorzaak niet gevonden, vermoedelijk
+    fragmentatie. Daarom eerst gc.collect() en bij MemoryError één herkansing.
+    """
+    import gc
+    err = None
+    for _ in range(2):
+        gc.collect()
+        try:
+            with open(path, "w") as f:
+                f.write("index;ldr_a_pct;ldr_b_pct;avg_pct;ldr_diff;stepper_stappen\n")
+                for i in range(len(AVG)):
+                    f.write("{};{:.1f};{:.1f};{:.1f};{:.6f};{}\n".format(
+                        i + 1, PCT_A[i], PCT_B[i], AVG[i], DIFF[i], STEP[i]))
+            return True, None
+        except MemoryError as e:
+            err = e
+        except Exception as e:
+            return False, e
+    return False, err
 
 # =========================
 #  HOOFD: scan(...)

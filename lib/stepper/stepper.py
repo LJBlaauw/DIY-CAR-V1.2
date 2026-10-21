@@ -2,7 +2,18 @@
 # Dual Stepper Controller zonder ramp, met PIO counters (geoptimaliseerd)
 # ================================================
 from machine import Pin
+from array import array
+import rp2
 from rp2 import PIO, StateMachine, asm_pio
+
+# PIO-instructies voor sm.exec(), één keer vooraf gecodeerd. exec() met een
+# tekst laat de assembler bij ELKE aanroep opnieuw draaien: gemeten ~12 ms en
+# ~230 bytes per positie-uitlezing (2026-10-21), tegen ~25 us en 0 bytes zo.
+_EXEC_PULL      = rp2.asm_pio_encode("pull()", 0)
+_EXEC_MOV_Y_OSR = rp2.asm_pio_encode("mov(y, osr)", 0)
+_EXEC_MOV_X_OSR = rp2.asm_pio_encode("mov(x, osr)", 0)
+_EXEC_MOV_ISR_Y = rp2.asm_pio_encode("mov(isr, y)", 0)
+_EXEC_PUSH      = rp2.asm_pio_encode("push()", 0)
 
 # -----------------------------
 # PIO stepper generator (delay via OSR -> X/Y)
@@ -71,8 +82,10 @@ sm3 = StateMachine(3, stepper_counter, in_base=DIR2, freq=F_PIO)
 # -----------------------------------------
 # PIO counters voor afstandsmeting wordt bij opstart op 0 gezet
 # -----------------------------------------
-sm2.active(1); sm2.exec("mov(y, 0xFFFFFFFF)")
-sm3.active(1); sm3.exec("mov(y, 0xFFFFFFFF)")
+# ("mov(y, 0xFFFFFFFF)" is geen geldige PIO-instructie en liet y op 0 staan,
+#  waardoor pio_pos1() tot de eerste reset_PIO_distance() onzin gaf.)
+for _sm in (sm2, sm3):
+    _sm.active(1); _sm.put(0xFFFFFFFF); _sm.exec(_EXEC_PULL); _sm.exec(_EXEC_MOV_Y_OSR)
 # -----------------------------------------
 # Posities (software teller) en targets
 # -----------------------------------------
@@ -118,17 +131,24 @@ def status():
 def reset_PIO_distance():
     """Reset de tellerstand in de PIO counters naar -1 (0xFFFFFFFF)."""
     for sm in (sm2, sm3):
-        sm.put(0xFFFFFFFF); sm.exec("pull()"); sm.exec("mov(y, osr)")
+        sm.put(0xFFFFFFFF); sm.exec(_EXEC_PULL); sm.exec(_EXEC_MOV_Y_OSR)
+
+_ybuf1 = array('i', [0])
+_ybuf2 = array('i', [0])
 
 def pio_pos1():
     """Number of step pulses motor A"""
-    sm2.exec("mov(isr, y)"); sm2.exec("push()"); y_val = sm2.get()
-    return 0xFFFFFFFF - y_val
+    # get(buf): y telt af vanaf 0xFFFFFFFF = -1 als signed int32, dus
+    # pulsen = -1 - y zonder groot (heap-)getal; bruikbaar vanuit een ISR.
+    sm2.exec(_EXEC_MOV_ISR_Y); sm2.exec(_EXEC_PUSH); sm2.get(_ybuf1)
+    return -1 - _ybuf1[0]
 
 def pio_pos2():
     """Number of step pulses motor B"""
-    sm3.exec("mov(isr, y)"); sm3.exec("push()"); y_val = sm3.get()
-    return 0xFFFFFFFF - y_val
+    # get(buf): y telt af vanaf 0xFFFFFFFF = -1 als signed int32, dus
+    # pulsen = -1 - y zonder groot (heap-)getal; bruikbaar vanuit een ISR.
+    sm3.exec(_EXEC_MOV_ISR_Y); sm3.exec(_EXEC_PUSH); sm3.get(_ybuf2)
+    return -1 - _ybuf2[0]
 
 def distance():
     p1 = pio_pos1(); p2 = pio_pos2()
@@ -165,8 +185,8 @@ sm2.irq(handler=counter_irq0); sm3.irq(handler=counter_irq1)
 def _start_motor(sm, delay, sm_counter,steps):
     # Laad het aantal stappen in X van de counter-SM  (target count)  
     sm_counter.put(steps)
-    sm_counter.exec("pull()")
-    sm_counter.exec("mov(x, osr)")
+    sm_counter.exec(_EXEC_PULL)
+    sm_counter.exec(_EXEC_MOV_X_OSR)
     sm_counter.active(1)
     # Start de stepper-SM met de gewenste delay
     sm.put(delay)

@@ -540,7 +540,7 @@ Implementatie: `ServoController.attach_tick_callback(fn)` (`lib/servo/servo_crl.
 |---|---|
 | `scan(dir, speed_cm_s, graden=370, start_graden=0, go_max=True, excel=True, out_csv=...)` | 370°-scan met 1kHz-sampling, 10×1ms-ringgemiddelde en uitlijning op A−B=0 |
 | `measure_now(n=10, interval_ms=1)` | Direct LDR-waarde lezen (%, tuple A/B), 1 ms-gemiddeld tegen 100Hz-netrimpel (blokkerend, ~10 ms) |
-| `enable_irq_timing(True/False)` / `irq_timing_stats()` | Meet optioneel de ISR-uitvoeringstijd; gemiddelde tijd in µs gedeeld door 10 is het CPU-percentage bij 1 kHz |
+| `enable_irq_timing(True/False)` / `irq_timing_stats()` | Meet optioneel de ISR-uitvoeringstijd (gemiddelde tijd in µs gedeeld door 10 is het CPU-percentage bij 1 kHz), het grootste gat tussen twee ISR-starts (`gap_max_us`) en het aantal gemiste 1ms-ticks (`missed_ticks`) |
 | `start_synced_sampling(servo_controller)` / `stop_synced_sampling(...)` | Koppel/ontkoppel LDR-sampling aan de 50Hz-servo-PWM-tick |
 | `read_synced()` | Niet-blokkerend: laatste fase-gesynchroniseerde LDR-waarde (%, tuple A/B), max ~20 ms oud |
 | `attach_stepper_reader(fn)` | Koppel stepper.pio_pos1 als positiebron voor de scan |
@@ -552,7 +552,7 @@ Implementatie: `ServoController.attach_tick_callback(fn)` (`lib/servo/servo_crl.
   'sample_ms': 1,                  # vaste ADC-sampleperiode
   'average_samples': 10,           # ringvenster van 10 ms
   'output_interval_ms': float,     # interval tussen opgeslagen scanpunten
-  'irq_timing': dict,              # optionele ISR-duurmeting
+  'irq_timing': dict,              # optionele ISR-duur- en gatmeting
   'est_time_s': float,            # geschatte scanduur
   'total_deg': 370.0,
   'dist_cm': float,

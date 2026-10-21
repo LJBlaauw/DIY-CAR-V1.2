@@ -70,6 +70,15 @@ import rp2
 from machine import Pin
 from rp2 import PIO, StateMachine, asm_pio
 
+# PIO-instructies voor sm.exec(), één keer vooraf gecodeerd. exec() met een
+# tekst laat de assembler bij ELKE aanroep opnieuw draaien: gemeten ~12 ms en
+# ~230 bytes per positie-uitlezing (2026-10-21), tegen ~25 us en 0 bytes zo.
+_EXEC_PULL      = rp2.asm_pio_encode("pull()", 0)
+_EXEC_MOV_Y_OSR = rp2.asm_pio_encode("mov(y, osr)", 0)
+_EXEC_MOV_X_OSR = rp2.asm_pio_encode("mov(x, osr)", 0)
+_EXEC_MOV_ISR_Y = rp2.asm_pio_encode("mov(isr, y)", 0)
+_EXEC_PUSH      = rp2.asm_pio_encode("push()", 0)
+
 
 # ----------------------------------------------------------------
 # PIO: stapgenerator met (repeat, delay)-woorden — ongewijzigd t.o.v. V1
@@ -390,6 +399,7 @@ class _Motor:
 
         self.sm = StateMachine(sm_id, ramp_stepper, freq=F_PIO, sideset_base=self.step)
         self.cnt = StateMachine(cnt_id, step_counter, freq=F_PIO, in_base=self.step)
+        self._ybuf = array('i', [0])
 
         # treq_sel = (pio_num << 3) + sm_num. Klopt ook op RP2350: DREQ_PIO2_TX0 = 16.
         self.dma = rp2.DMA()
@@ -452,8 +462,8 @@ class _Motor:
     # -- odometer -------------------------------------------------
     def reset_pos(self):
         self.cnt.put(0xFFFFFFFF)
-        self.cnt.exec("pull()")
-        self.cnt.exec("mov(y, osr)")
+        self.cnt.exec(_EXEC_PULL)
+        self.cnt.exec(_EXEC_MOV_Y_OSR)
         self.committed = 0
         self._pos = 0
         self._seen = 0
@@ -467,9 +477,12 @@ class _Motor:
         van; werkelijke lineaire verplaatsing vraagt een externe referentie
         (zie de kop, "WAT DE ODOMETER WEL EN NIET IS").
         """
-        self.cnt.exec("mov(isr, y)")
-        self.cnt.exec("push()")
-        return 0xFFFFFFFF - self.cnt.get()
+        self.cnt.exec(_EXEC_MOV_ISR_Y)
+        self.cnt.exec(_EXEC_PUSH)
+        # get(buf) i.p.v. get(): y telt af vanaf 0xFFFFFFFF, als signed
+        # int32 is dat -1 - pulsen. Zo ontstaat geen groot (heap-)getal.
+        self.cnt.get(self._ybuf)
+        return -1 - self._ybuf[0]
 
     def travel(self):
         """Signed positie in stappen: vooruit positief, achteruit negatief."""

@@ -52,6 +52,15 @@ from machine import Pin
 from rp2 import PIO, StateMachine, asm_pio
 import rp2
 
+# PIO-instructies voor sm.exec(), één keer vooraf gecodeerd. exec() met een
+# tekst laat de assembler bij ELKE aanroep opnieuw draaien: gemeten ~12 ms en
+# ~230 bytes per positie-uitlezing (2026-10-21), tegen ~25 us en 0 bytes zo.
+_EXEC_PULL      = rp2.asm_pio_encode("pull()", 0)
+_EXEC_MOV_Y_OSR = rp2.asm_pio_encode("mov(y, osr)", 0)
+_EXEC_MOV_X_OSR = rp2.asm_pio_encode("mov(x, osr)", 0)
+_EXEC_MOV_ISR_Y = rp2.asm_pio_encode("mov(isr, y)", 0)
+_EXEC_PUSH      = rp2.asm_pio_encode("push()", 0)
+
 
 # ----------------------------------------------------------------
 # PIO: stapgenerator met (repeat, delay)-woorden
@@ -259,6 +268,7 @@ class _Motor:
 
         self.sm = StateMachine(sm_id, ramp_stepper, freq=F_PIO, sideset_base=self.step)
         self.cnt = StateMachine(cnt_id, step_counter, freq=F_PIO, in_base=self.step)
+        self._ybuf = array('i', [0])
 
         self.dma = rp2.DMA()
         self._ctrl = self.dma.pack_ctrl(size=2, inc_read=True, inc_write=False,
@@ -276,16 +286,19 @@ class _Motor:
 
     def reset_pos(self):
         self.cnt.put(0xFFFFFFFF)
-        self.cnt.exec("pull()")
-        self.cnt.exec("mov(y, osr)")
+        self.cnt.exec(_EXEC_PULL)
+        self.cnt.exec(_EXEC_MOV_Y_OSR)
         self.committed = 0
 
     def pulses(self):
         """Monotone hardware-pulsteller sinds de laatste reset_pos(). Kent
         geen richting — net als stepper.py's pio_pos1()/pio_pos2()."""
-        self.cnt.exec("mov(isr, y)")
-        self.cnt.exec("push()")
-        return 0xFFFFFFFF - self.cnt.get()
+        self.cnt.exec(_EXEC_MOV_ISR_Y)
+        self.cnt.exec(_EXEC_PUSH)
+        # get(buf) i.p.v. get(): y telt af vanaf 0xFFFFFFFF, als signed
+        # int32 is dat -1 - pulsen. Zo ontstaat geen groot (heap-)getal.
+        self.cnt.get(self._ybuf)
+        return -1 - self._ybuf[0]
 
     def start_table(self, words, n_steps):
         """Hang een woordenlijst achter wat er nog in de FIFO staat, via DMA.

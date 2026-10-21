@@ -146,7 +146,7 @@ class ServoController:
         self.laser_pwm.freq(self.pwm_freq)  # MOET gelijk zijn aan servo's (zelfde slice)
         self.laser_power(0.0)               # start uit
 
-        # --- Tick via externe PWM op GPIO7 (input) ---
+        # --- Tick via externe PWM op GPIO5 (input, default irq_gpio) ---
         self._tick_cb = None    # optionele externe hard-IRQ-callback, zie attach_tick_callback()
         self._irq_pin = Pin(int(irq_gpio), Pin.IN, Pin.PULL_DOWN)
         self._irq_pin.irq(trigger=Pin.IRQ_RISING, handler=self._pwm_irq)
