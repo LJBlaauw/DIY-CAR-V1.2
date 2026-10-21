@@ -544,11 +544,16 @@ def read_synced_diff():
                          int(_sync_buf_b[_sync_ready]))
 
 def _postprocess_to_percent():
+    # array('f') i.p.v. lijsten: een lijst van floats maakt per waarde een los
+    # heap-object van 16 bytes. 4 x ~1100 daarvan, verspreid tussen de
+    # scan-rommel, versnipperden de heap zo dat open() voor de CSV (1148 bytes
+    # aaneengesloten) faalde bij 140-300 kB vrij (gemeten: grootste vrije blok
+    # 1,2 kB). Een array is één aaneengesloten blok.
     N = len(_raw_sum_a)
-    pct_a = [0.0] * N
-    pct_b = [0.0] * N
-    avg   = [0.0] * N
-    diff  = [0.0] * N
+    pct_a = array('f', bytes(4 * N))
+    pct_b = array('f', bytes(4 * N))
+    avg   = array('f', bytes(4 * N))
+    diff  = array('f', bytes(4 * N))
     for i in range(N):
         adc_a = _raw_sum_a[i]
         adc_b = _raw_sum_b[i]
@@ -691,10 +696,9 @@ def _fine_null_seek(stepper_mod, speed_cm_s):
 def _write_csv(path, PCT_A, PCT_B, AVG, DIFF, STEP):
     """Schrijf CSV met ; als scheidingsteken (Nederlands Excel-formaat).
 
-    Na een scan staan er ~1100 floats per lijst op de heap. Twee keer (van ~25
-    pogingen, 2026-10-21) gaf het schrijven toen "memory allocation failed,
-    allocating 1148 bytes" bij >250 kB vrij; oorzaak niet gevonden, vermoedelijk
-    fragmentatie. Daarom eerst gc.collect() en bij MemoryError één herkansing.
+    open() vraagt 1148 bytes aaneengesloten (file-object + 1 kB littlefs-cache).
+    Na een scan was de heap daarvoor te versnipperd (zie _postprocess_to_percent);
+    gc.collect() vooraf en één herkansing bij MemoryError als extra vangnet.
     """
     import gc
     err = None
