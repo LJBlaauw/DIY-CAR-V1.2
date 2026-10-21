@@ -36,6 +36,12 @@ LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB,
 # restcorrectie die alleen voor de scan geldt, hoort in ROT_SCALE.
 WHEEL_BASE_CM        = 11.26
 ROT_SCALE            = 1.0
+# Correctie per draairichting, bovenop ROT_SCALE. Gemeten 2026-10-21 met
+# stepper.rotate() 360° bij 5 cm/s: rechtsom gyro 360,0°, linksom 370,1° en
+# 369,8° (laserstip 8 cm verder op 50 cm = 9,1°). Linksom draait de kar dus
+# ~2,7% verder, waarschijnlijk door zwenkwiel/gewichtsverdeling.
+ROT_SCALE_L          = 360.0 / 369.95
+ROT_SCALE_R          = 1.0
 
 # LDR instellingen
 #
@@ -97,6 +103,10 @@ ACCEL_MM_S2          = 500.0
 SCAN_DEG             = 370.0
 BACKTRACK_SPEED_CM_S = 3.0
 NULL_WINDOW_DEG      = 15.0
+# Na de scan altijd DOORDRAAIEN in scanrichting naar de lamp, nooit omkeren:
+# bij een richtingswissel klapt het zwenkwiel achter om, wat een ruk en slip
+# geeft. Kost hooguit ~360° extra draaien. False = kortste weg (oud gedrag).
+RETURN_FORWARD_ONLY  = True
 NULL_STEP_DEG        = 1.0
 NULL_DEADBAND        = 0.03
 CSV_DEFAULT          = "/scan.csv"
@@ -223,14 +233,15 @@ def _stop_pio():
 #  HELPERS
 # =========================
 
-def _deg_to_distance_cm(deg):
-    return math.pi * WHEEL_BASE_CM * (deg / 360.0) * ROT_SCALE
+def _deg_to_distance_cm(deg, direction="r"):
+    scale = ROT_SCALE_L if direction == "l" else ROT_SCALE_R
+    return math.pi * WHEEL_BASE_CM * (deg / 360.0) * ROT_SCALE * scale
 
 def _opposite_dir(d):
     return 'l' if d == 'r' else 'r'
 
-def _estimate_time_from_degrees(total_deg, speed_cm_s):
-    dist_cm = _deg_to_distance_cm(total_deg)
+def _estimate_time_from_degrees(total_deg, speed_cm_s, direction="r"):
+    dist_cm = _deg_to_distance_cm(total_deg, direction)
     s_mm = dist_cm * 10.0
     v_mm_s = speed_cm_s * 10.0
     a = ACCEL_MM_S2
@@ -632,22 +643,23 @@ def _rotate_degrees(stepper_mod, direction, degrees, speed_cm_s):
         started = stepper_mod.rotate_deg(signed, speed_cm_s)
     else:
         started = stepper_mod.rotate(direction, speed_cm_s,
-                                     _deg_to_distance_cm(degrees))
+                                     _deg_to_distance_cm(degrees, direction))
     if started is not False:
         _wait_stepper_done(stepper_mod)
     return started
 
 
 def _go_to_alignment(stepper_mod, scan_dir, angle_deg, speed_cm_s):
-    """Ga vanaf eindhoek 370 graden via de kortste weg naar angle_deg."""
+    """Ga vanaf eindhoek 370 graden naar angle_deg: doordraaien in scanrichting
+    (RETURN_FORWARD_ONLY), anders via de kortste weg."""
     end_angle = SCAN_DEG % 360.0
     forward_deg = (angle_deg - end_angle) % 360.0
     backward_deg = (end_angle - angle_deg) % 360.0
     speed = min(speed_cm_s, BACKTRACK_SPEED_CM_S)
-    if forward_deg <= backward_deg:
+    if RETURN_FORWARD_ONLY or forward_deg <= backward_deg:
         _rotate_degrees(stepper_mod, scan_dir, forward_deg, speed)
         return dict(direction=scan_dir, degrees=forward_deg,
-                    method="forward_shortest", backlash_deg=0.0)
+                    method=("forward_only" if RETURN_FORWARD_ONLY else "forward_shortest"), backlash_deg=0.0)
 
     # Bij terugdraaien iets voorbij het doel en eindigen in scanrichting, zodat
     # de mechanische speling steeds vanaf dezelfde kant wordt opgenomen.
@@ -757,7 +769,7 @@ def scan(dir_char,
         attach_stepper_reader(stepper.pio_pos1)
 
     total_deg = SCAN_DEG
-    T_s, dist_cm = _estimate_time_from_degrees(total_deg, speed_cm_s)
+    T_s, dist_cm = _estimate_time_from_degrees(total_deg, speed_cm_s, dir_char)
     T_s *= 1.05
     target_samples = max(1, int(round(TARGET_SAMPLES_PER_DEG * total_deg)))
     output_interval_ms = (T_s * 1000.0) / target_samples
