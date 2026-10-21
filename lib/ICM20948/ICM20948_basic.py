@@ -2,7 +2,7 @@ import machine
 import time
 import _thread
 import math
-from icm20948 import ICM20948
+from icm20948 import ICM20948, load_mag_calibration
 
 # Globale variabele voor de actuele, gecorrigeerde koers (heading)
 # Core 1 schrijft hier continu in, Core 0 leest dit live uit
@@ -16,11 +16,10 @@ def verwerk_kompas_core1():
     # ICM-20948 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
     i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 
-    # 2. VUL HIER UW EIGEN KALIBRATIERESULTATEN IN (uit Calibrate_ICM20948.py):
+    # 2. Kalibratie komt uit config.json (sectie "icm20948", zie Calibrate_ICM20948.py)
     sensor = ICM20948(
         i2c,
-        mag_offset=(-24.5, 12.3, -5.1),  # Hard-iron offsets (X, Y, Z)
-        mag_scale=(0.95, 1.02, 1.03),    # Soft-iron schaling (X, Y, Z)
+        **load_mag_calibration(),  # mag_offset/mag_scale uit config.json
     )
 
     # Variabele voor het complementair filter

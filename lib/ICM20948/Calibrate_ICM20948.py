@@ -20,7 +20,7 @@ time.sleep(3)
 offset, scale = sensor.ak09916.calibrate(count=256, delay=200)
 
 print("\n--- KALIBRATIE VOLTOOID ---")
-print("Kopieer de onderstaande regels naar uw hoofdprogramma (ICM20948-constructor):")
+print("Zet deze waarden in config.json, sectie \"icm20948\" (mag_offset en mag_scale als lijst):")
 print(f"mag_offset=({offset[0]:.2f}, {offset[1]:.2f}, {offset[2]:.2f})")
 print(f"mag_scale=({scale[0]:.4f}, {scale[1]:.4f}, {scale[2]:.4f})")
 print("---------------------------")

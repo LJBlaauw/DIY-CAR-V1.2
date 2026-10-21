@@ -108,7 +108,7 @@ toon([
     f" {scale_z:.2f})",
 ])
 
-print("Kopieer de onderstaande regels naar uw hoofdprogramma (ICM20948-constructor):")
+print("Zet deze waarden in config.json, sectie \"icm20948\" (mag_offset en mag_scale als lijst):")
 print(f"mag_offset=({offset_x:.2f}, {offset_y:.2f}, {offset_z:.2f})")
 print(f"mag_scale=({scale_x:.4f}, {scale_y:.4f}, {scale_z:.4f})")
 print("---------------------------")

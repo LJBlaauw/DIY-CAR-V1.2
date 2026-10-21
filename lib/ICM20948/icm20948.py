@@ -108,6 +108,28 @@ MODE_CONTINUOUS_100HZ = const(0x08)
 _AK_SO = 0.15  # uT per LSB (vast 16-bit, geen fuse-ROM-correctie zoals bij AK8963)
 
 
+CONFIG_PATH = "config.json"
+
+
+def load_mag_calibration(path=CONFIG_PATH):
+    """Lees mag_offset/mag_scale uit de "icm20948"-sectie van config.json.
+
+    Ontbreekt de sectie of is het bestand corrupt, dan volgt (0,0,0)/(1,1,1):
+    ongekalibreerd, maar bruikbaar. Bewust geen automatische inlezing in de
+    constructor: de kalibratiescripts hebben juist ongekalibreerde waarden nodig.
+
+        sensor = ICM20948(i2c, **load_mag_calibration())
+    """
+    try:
+        import json
+        with open(path) as f:
+            cfg = json.load(f).get("icm20948", {})
+        return {"mag_offset": tuple(cfg["mag_offset"]),
+                "mag_scale": tuple(cfg["mag_scale"])}
+    except Exception:
+        return {"mag_offset": (0, 0, 0), "mag_scale": (1, 1, 1)}
+
+
 class ICM20948:
     """Gyroscoop + accelerometer + (via bypass) AK09916-magnetometer."""
 

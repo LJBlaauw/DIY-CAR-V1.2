@@ -25,5 +25,18 @@
     "b_gamma": 1.0772,
     "b_ln_c": -0.6005,
     "note": "Pull-up R29/R30 = 47 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19, c herberekend voor 47 kOhm op 2026-10-20."
+  },
+  "icm20948": {
+    "mag_offset": [
+      -23.85,
+      11.02,
+      -12.08
+    ],
+    "mag_scale": [
+      1.1249,
+      0.9845,
+      0.9131
+    ],
+    "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916, in het uitgelijnde assenstelsel (X naar voren, Z omhoog). Gemeten 2026-10-21 met module ingebouwd in de auto: gecorrigeerde veldsterkte 48,1 uT, spreiding 5%. Opnieuw meten met tests/test_icm20948_calibrate.py na verplaatsen van de module of wijzigingen aan motoren/accu/bekabeling."
   }
 }

@@ -181,7 +181,7 @@ MAX_DIFF_FRAC = 0.20         # maximale snelheidsdifferentie per wiel (+/- 20%)
 # LDR_DIFF_SIGN    +1 = een positief LDR-verschil betekent dat de bron RECHTS
 #                  ligt. Verifieren: houd een lamp rechts, ldr_diff() > 0.
 MOTOR_TURN_SIGN = +1
-GYRO_Z_SIGN     = +1
+GYRO_Z_SIGN     = -1   # gemeten 2026-10-21 (ICM-20948, Z-as omhoog): rechtsom draaien gaf gz < 0
 LDR_DIFF_SIGN   = +1
 
 

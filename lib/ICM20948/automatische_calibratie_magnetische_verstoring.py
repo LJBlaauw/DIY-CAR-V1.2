@@ -77,7 +77,7 @@ soft_iron_y = gemiddelde_straal / chord_y
 soft_iron_z = gemiddelde_straal / chord_z
 
 # Print de kant-en-klare regels voor uw hoofdprogramma
-print("\nKopieer de onderstaande regels naar uw hoofdprogramma (ICM20948-constructor):")
+print("\nZet deze waarden in config.json, sectie \"icm20948\" (mag_offset en mag_scale als lijst):")
 print(f"mag_offset=({hard_iron_x:.2f}, {hard_iron_y:.2f}, {hard_iron_z:.2f})")
 print(f"mag_scale=({soft_iron_x:.4f}, {soft_iron_y:.4f}, {soft_iron_z:.4f})")
 print("\n---------------------------")

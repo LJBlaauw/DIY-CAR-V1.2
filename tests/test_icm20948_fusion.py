@@ -1,6 +1,6 @@
 import machine
 import time
-from icm20948 import ICM20948
+from icm20948 import ICM20948, load_mag_calibration
 from fusion import Fusion
 from ssd1306 import SSD1306_I2C
 
@@ -15,8 +15,7 @@ oled = SSD1306_I2C(128, 64, i2c_oled)
 
 sensor = ICM20948(
     i2c_sensor,
-    mag_offset=(-24.5, 12.3, -5.1),  # VUL HIER UW KALIBRATIEWAARDEN IN (zie test_icm20948_calibrate.py)
-    mag_scale=(0.95, 1.02, 1.03),
+    **load_mag_calibration(),  # mag_offset/mag_scale uit config.json
 )
 fuse = Fusion()
 

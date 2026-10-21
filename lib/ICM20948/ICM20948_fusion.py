@@ -1,7 +1,7 @@
 import machine
 import time
 import _thread
-from icm20948 import ICM20948
+from icm20948 import ICM20948, load_mag_calibration
 from fusion import Fusion  # Importeer het complementaire fusion-filter
 
 actuele_koers = 0.0
@@ -14,11 +14,10 @@ def geavanceerd_kompas_core1():
     # ICM-20948 zit op GPIO10 (SDA1) en GPIO11 (SCL1) -> hardware I2C-bus 1
     i2c = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
 
-    # Uw kalibratiedata injecteren (uit Calibrate_ICM20948.py)
+    # Kalibratie komt uit config.json (sectie "icm20948", zie Calibrate_ICM20948.py)
     sensor = ICM20948(
         i2c,
-        mag_offset=(-24.5, 12.3, -5.1),
-        mag_scale=(0.95, 1.02, 1.03),
+        **load_mag_calibration(),  # mag_offset/mag_scale uit config.json
     )
 
     # Start het fusion-filter. Fusion houdt zelf de verstreken tijd (dt)
