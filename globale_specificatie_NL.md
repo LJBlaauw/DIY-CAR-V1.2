@@ -132,7 +132,8 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 
 **Constanten:**
 - **[GEMETEN]** `WHEEL_CIRC = 19,1 cm` — wielomtrek. Was 20,94 cm; die waarde gaf **8,8 % te korte afstanden** (50 cm gecommandeerd → 45,6 cm gereden). De belaste rolomtrek van een rubberwiel is iets kleiner dan de vrije omtrek, dus deze waarde nog kalibreren (zie *Odometriekalibratie* hieronder).
-- **[GEMETEN]** `TRACK_WIDTH = 13,6 cm` — geometrische spoorbreedte hart-op-hart. Nodig voor elke rotatie- en koersberekening.
+- **[GEMETEN]** `TRACK_WIDTH = 13,6 cm` — geometrische spoorbreedte hart-op-hart (alleen documentatie).
+- **[GEMETEN]** `TRACK_WIDTH_EFF = 11,26 cm` — effectieve spoorbreedte, gebruikt voor elke rotatie- en koersberekening (`STEPS_PER_DEG`). Gemeten 2026-10-21 met de ICM-20948-gyro: een gecommandeerde 360°-rotatie gaf 434,9° (kompas ~420°). Het ASA-frame zakt onder accu en motoren door, waardoor de banden op de binnenrand van het loopvlak lopen.
 - `STEPS_REV = 12800` — stappen per omwenteling (**1/64 microstepping**, TMC2209: 200 volle stappen × 64). MS-pinnen hardwired: **MS1 → GND, MS2 → VCC_IO** *(in de huidige documentatie als +5 V aangegeven; fysiek verifiëren)* (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md)).
 - **[BEREKEND]** `CM_PER_STEP ≈ 14,9 µm/stap`
 - **[BEREKEND]** `STEPS_PER_DEG ≈ 159` — stappenverschil tussen de wielen per graad koersverandering. Resolutie dus **0,0063°**.
@@ -192,7 +193,7 @@ Het is een **API-grotendeels compatibele opvolger, geen drop-in replacement.** D
 |---|---|
 | Massa kar | **[GEMETEN]** 1636 g |
 | Wielomtrek / -radius | **[GEMETEN/BEREKEND]** 19,1 cm / 3,04 cm |
-| Spoorbreedte (hart-op-hart) | **[GEMETEN]** 13,6 cm geometrisch |
+| Spoorbreedte (hart-op-hart) | **[GEMETEN]** 13,6 cm geometrisch, **11,26 cm effectief** (gyro) |
 | Motor | 17HS8401 — NEMA 17, 1,7 A, 52 N·cm, 1,8 Ω, 3,2 mH, rotor 68 g·cm² |
 | Driver | TMC2209, standalone, **stealthChop**, 1/64 microstepping |
 | VREF / motorstroom | **[BEREKEND, TE VERIFIËREN]** Was 1,0 V (~0,71 A RMS); **verhoogd naar 1,5 V** (2026-09-19) → ca. **1,07 A RMS** volgens huidige driveraannames; controleer sense-resistor/driveruitvoering |
@@ -506,7 +507,7 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 
 **Config:**
 - `LDR_PIN_A = GPIO26`, `LDR_PIN_B = GPIO27`
-- `WHEEL_BASE_CM = 13,6 cm` — spoorbreedte hart-op-hart, voor graden→cm omrekening. **Stond op 18,5 cm**, terwijl de gemeten spoorbreedte 13,6 cm is; een gecommandeerde 370°-scan draaide daardoor in werkelijkheid **503°**. Moet gelijk blijven aan `TRACK_WIDTH` in `stepper_ramp.py`; empirische correctie (tyre-scrub, backlash) hoort in `ROT_SCALE`.
+- `WHEEL_BASE_CM = 11,26 cm` — effectieve spoorbreedte, voor graden→cm omrekening. **Stond op 18,5 cm** (370°-scan draaide 503°) en daarna op de geometrische 13,6 cm (nog ~21 % te veel, gyro-meting 2026-10-21). Moet gelijk blijven aan `TRACK_WIDTH_EFF` in `stepper_ramp.py`; een restcorrectie die alleen voor de scan geldt, hoort in `ROT_SCALE`.
 - **[CONFIG]** `LDR_R_FIXED_OHM = 47 000` — pull-up naar 3V3 (R29/R30), ook in `config.json` → `"ldr"`. **Geschiedenis: 10 000 → 1000 → 10 000 → 47 000.** Met de huidige lamp loopt de LDR van ~4,7 kΩ (15 cm) tot ~450 kΩ (4 m); 47 kΩ ligt op het geometrisch midden en geeft ~350–1000 echte 12-bit codes per e-voud over dat hele bereik (rond 0° ≈ 16–46 codes per graad koersfout). 200 kΩ wint boven ~2 m, maar zakt bij 13 cm (grijpafstand) van ~16 naar ~4 codes per graad. Oude toelichting: De stap naar 1 kΩ was voor meer resolutie op de bundelas (1 kΩ geeft ~9,1–16,7 % full-scale i.p.v. ~0,99–1,96 % bij 10 kΩ voor een LDR van 100–200 Ω, ca. 372–683 tegen 41–80 echte 12-bit counts), maar is met de nieuwe, fellere lichtbron weer teruggedraaid. **[TE VERIFIËREN]** of de eerdere zorg — dat de bundelas-Q-daling van ~34 LSB met 10 kΩ nog maar ~4,4 LSB overhoudt en in de ruis verdwijnt — met de fellere bron nog geldt. MicroPython `read_u16()` schaalt deze ruwe ADC-waarde naar 16 bit, dus 12-bit ADC-counts en `read_u16()`-counts mogen niet door elkaar worden gebruikt.
 - **[CONFIG]** `LDR_R_MIN_OHM = 100` — ondergrens procentschaal (100 %). Was 60 en daarna 20 Ω; met 47 kΩ is het gemeten minimum ~4,7 kΩ (15 cm), 100 Ω laat ruim marge voor een fellere bundelas.
 - **[CONFIG]** `LDR_R_MAX_OHM = 5 000 000` — **was 20 000**, waardoor de procentschaal al vlakbij vastklemde (4 m ≈ 300–450 kΩ). 5 MΩ ligt ruim boven 4 m (extrapolatie ~15 m) en onder de donkerwaarde (~8–15 MΩ).

@@ -50,10 +50,14 @@ def stepper_counter():
 F_PIO = 15_000_000         # 150 MHz sysclk / 10 → integer klokdeler (geen fractionele jitter).
                            # STEP-puls blijft 11 cycles = 733 ns ≥ 100 ns (TMC2209-minimum).
 WHEEL_CIRC   = 19.1        # cm — gemeten omtrek (was 20.94; die gaf 8,8% te korte afstanden)
-TRACK_WIDTH  = 13.6        # cm — spoorbreedte hart-op-hart, voor rotatie/koersberekening
+TRACK_WIDTH  = 13.6        # cm — geometrische spoorbreedte hart-op-hart (alleen documentatie)
+TRACK_WIDTH_EFF = 11.26      # cm — EFFECTIEVE spoorbreedte, gemeten 2026-10-21: rotate 360°
+                             # links gaf 434,9° op de ICM-20948-gyro (kompas ~420°). Het ASA-
+                             # frame zakt onder accu/motoren door, de banden lopen op de
+                             # binnenrand van het loopvlak. 13,6 x 360 / 434,9 = 11,26.
 STEPS_REV    = 12800       # 1/64 microstepping (TMC2209: 200 volle stappen × 64; MS1→GND, MS2→+5V)
 CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 14,9 µm/stap
-STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # ≈ 159 stappen verschil per graad koers
+STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ≈ 132 stappen verschil per graad koers
 
 # -----------------------------------------
 # Pin definitie

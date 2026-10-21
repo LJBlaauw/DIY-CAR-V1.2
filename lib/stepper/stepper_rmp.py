@@ -100,9 +100,13 @@ CYCLES_FIXED  = 5            # vaste overhead per stap binnen een segment (zie s
 WHEEL_CIRC    = 19.1         # cm — gemeten wielomtrek
 TRACK_WIDTH   = 13.6         # cm — spoorbreedte hart-op-hart (geometrie, niet gebruikt door
                              # rotate()/mov() hieronder, maar stond ook al zo in stepper.py)
+TRACK_WIDTH_EFF = 11.26      # cm — EFFECTIEVE spoorbreedte, gemeten 2026-10-21: rotate 360°
+                             # links gaf 434,9° op de ICM-20948-gyro (kompas ~420°). Het ASA-
+                             # frame zakt onder accu/motoren door, de banden lopen op de
+                             # binnenrand van het loopvlak. 13,6 x 360 / 434,9 = 11,26.
 STEPS_REV     = 12800        # 1/64 microstepping (TMC2209, 200 volle stappen x 64)
 CM_PER_STEP   = WHEEL_CIRC / STEPS_REV                 # ~14,9 um/stap
-STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # idem: alleen geometrie
+STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # idem: alleen geometrie
 
 # Snelheidsgrenzen (motor 17HS8401, TMC2209 stealthChop, VREF 1,5 V = ca. 1,07 A RMS
 # sinds 2026-09-19, was 1 V/0,71 A; zie globale_specificatie_NL.md). V_MAX_CM_S

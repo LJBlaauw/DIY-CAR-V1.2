@@ -177,10 +177,14 @@ CYCLES_FIXED  = 5            # vaste cycles PER STAP binnen een segment:
                              # 1, 2, 8 en 256 stappen (zie meet_frequentie()).
 
 WHEEL_CIRC    = 19.1         # cm — gemeten wielomtrek
-TRACK_WIDTH   = 13.6         # cm — spoorbreedte hart-op-hart
+TRACK_WIDTH   = 13.6         # cm — geometrische spoorbreedte hart-op-hart (documentatie)
+TRACK_WIDTH_EFF = 11.26      # cm — EFFECTIEVE spoorbreedte, gemeten 2026-10-21: rotate 360°
+                             # links gaf 434,9° op de ICM-20948-gyro (kompas ~420°). Het ASA-
+                             # frame zakt onder accu/motoren door, de banden lopen op de
+                             # binnenrand van het loopvlak. 13,6 x 360 / 434,9 = 11,26.
 STEPS_REV     = 12800        # 1/64 microstepping (TMC2209, 200 volle stappen x 64)
 CM_PER_STEP   = WHEEL_CIRC / STEPS_REV                 # ~14,9 um/stap
-STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH / CM_PER_STEP   # ~159 stappen verschil per graad
+STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ~132 stappen verschil per graad
 
 RAD_TO_DEG    = 57.29577951308232
 

@@ -28,12 +28,13 @@ LDR_PIN_B            = 27
 LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB, intern gebruik)
 
 # geometrie
-# LET OP: dit moet dezelfde spoorbreedte zijn als TRACK_WIDTH in
-# lib/stepper/stepper_ramp.py. Stond eerder op 18.5, terwijl de gemeten
-# spoorbreedte hart-op-hart 13.6 cm is -> een gecommandeerde 370°-scan draaide
-# in werkelijkheid 503°. Empirische correctie (tyre-scrub, backlash) hoort in
-# ROT_SCALE, niet in deze waarde.
-WHEEL_BASE_CM        = 13.6
+# LET OP: dit moet dezelfde spoorbreedte zijn als TRACK_WIDTH_EFF in
+# lib/stepper/stepper_ramp.py. Geschiedenis: 18,5 cm gaf 503° bij een 370°-scan;
+# de geometrische 13,6 cm (hart-op-hart) gaf nog ~21% te veel (gyro 2026-10-21:
+# 434,9° bij 360°), omdat het doorgezakte frame de banden op de binnenrand laat
+# lopen. 11,26 cm is de gemeten EFFECTIEVE spoorbreedte. Een eventuele
+# restcorrectie die alleen voor de scan geldt, hoort in ROT_SCALE.
+WHEEL_BASE_CM        = 11.26
 ROT_SCALE            = 1.0
 
 # LDR instellingen
