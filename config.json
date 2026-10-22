@@ -28,15 +28,15 @@
   },
   "icm20948": {
     "mag_offset": [
-      -23.85,
-      11.02,
-      -12.08
+      -42.75,
+      33.45,
+      -3.22
     ],
     "mag_scale": [
-      1.1249,
-      0.9845,
-      0.9131
+      1.1973,
+      0.8755,
+      0.9779
     ],
-    "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916, in het uitgelijnde assenstelsel (X naar voren, Z omhoog). Gemeten 2026-10-21 met module ingebouwd in de auto: gecorrigeerde veldsterkte 48,1 uT, spreiding 5%. Opnieuw meten met tests/test_icm20948_calibrate.py na verplaatsen van de module of wijzigingen aan motoren/accu/bekabeling."
+    "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916 (X naar voren, Z omhoog), handkalibratie 2026-10-22 met de NIEUWE module (de eerste is defect geraakt bij het solderen van de INT-draad), motordrivers UIT: |B| 49,5 uT, spreiding 7%. KOMPAS VOORLOPIG GEPARKEERD: een gyro-gerefereerde draaitest op de vloer gaf +/-15-20 graden koersfout. Oorzaken: de sensor zit achterin naast de accu (stalen cellen op 20 mm, accukabels: ~10 uT per ampere op 2 cm) en beschrijft bij draaien op de plaats een cirkel van ~30 cm door het ongelijke veld van vloer/meubels. Motoren en servo's (100-150 mm) storen niet merkbaar (test met wielen vrij: <0,7 uT). Een mast boven de wielas kan niet (servoarm). Beste alternatief: onder het chassis midden tussen de aandrijfwielen. Koers: gebruik de gyro (rotate_deg_gyro)."
   }
 }
