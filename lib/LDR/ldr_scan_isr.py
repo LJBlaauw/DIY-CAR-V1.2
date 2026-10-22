@@ -636,14 +636,13 @@ def _find_alignment(pct_a, pct_b, avg, diff, steps, total_deg=SCAN_DEG):
 
 
 def _rotate_degrees(stepper_mod, direction, degrees, speed_cm_s):
+    # Bewust rotate() met _deg_to_distance_cm() en NIET stepper_ramp.rotate_deg():
+    # de scanhoeken komen uit dezelfde omrekening (WHEEL_BASE_CM, ROT_SCALE_L/R),
+    # dus terugdraaien blijft stappen-consistent met de scan.
     if degrees <= 0.0:
         return False
-    if hasattr(stepper_mod, "rotate_deg"):
-        signed = degrees if direction == "r" else -degrees
-        started = stepper_mod.rotate_deg(signed, speed_cm_s)
-    else:
-        started = stepper_mod.rotate(direction, speed_cm_s,
-                                     _deg_to_distance_cm(degrees, direction))
+    started = stepper_mod.rotate(direction, speed_cm_s,
+                                 _deg_to_distance_cm(degrees, direction))
     if started is not False:
         _wait_stepper_done(stepper_mod)
     return started
@@ -764,9 +763,11 @@ def scan(dir_char,
     if speed_cm_s <= 0:
         raise ValueError("speed_cm_s moet groter dan nul zijn")
 
-    import stepper
-    if hasattr(stepper, "pio_pos1"):
-        attach_stepper_reader(stepper.pio_pos1)
+    # stepper_ramp i.p.v. stepper.py: zachte op- en afremramp (minder slip bij het
+    # omklappen van het zwenkwiel) en 733 ns STEP-pulsen. Niet samen met
+    # stepper.py importeren: beide claimen PIO0 SM0-3.
+    import stepper_ramp as stepper
+    attach_stepper_reader(stepper.pio_pos1)
 
     total_deg = SCAN_DEG
     T_s, dist_cm = _estimate_time_from_degrees(total_deg, speed_cm_s, dir_char)

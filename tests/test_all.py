@@ -1,5 +1,5 @@
 from servo_crl import ServoController
-import stepper
+import stepper_ramp as stepper   # ldr.scan() gebruikt stepper_ramp; niet mengen met stepper.py (zelfde PIO-SM's)
 import ldr_scan_isr as ldr
 import time
 import ultrasoon
@@ -29,17 +29,17 @@ stepper.disable()
 # Relatief t.o.v. rust bewegen (nooit onder rust):
 sc.servo_pos(2, 30, 20)         # Servo 2 naar rust+30° 20°/sec
 stepper.rotate('l',10, 30)		# rotate left, speed= 10cm/sec, distance=30cm
-while stepper.sm0.active() or stepper.sm1.active(): # wacht tot de stepper (rotatie) klaar is
+while stepper.busy(): # wacht tot de stepper (rotatie) klaar is
     pass
 sc.servo_pos(1, 20, 20)
 stepper.mov('b', 5, 10)			# move backwards speed=5cm/sec, distance=10cm
-while stepper.sm0.active() or stepper.sm1.active():
+while stepper.busy():
     pass
 sc.servo_pos(4, 90, 20)         # grijper: rust+15°
 sc.laser_power(10)				# zet laser op 10% output
 sc.servo_pos(2, 50, 10);sc.servo_pos(1, 50, 10)
 stepper.s1('f',1,10)			# alleen stepper 1 forward 1cm/sec, 10 cm
-while stepper.sm0.active() or stepper.sm1.active():
+while stepper.busy():
     pass
 sc.laser_power(50)
 

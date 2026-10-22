@@ -79,7 +79,22 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | Component | vanaf | tot | maat | richting |
 |---|---|---|---|---|
 | totale lengte CAR | ultrasoon | achterkant batterij | 230mm | horizontaal |
-| zwenkwiel | wiel | zwenkwiel | 155mm | horizontaal |
+| zwenkwiel | wielas | zwenkwiel | **150mm** (2026-10-22 opgegeven; stond eerder als 155mm "wiel → zwenkwiel") | horizontaal |
+| zwenkwiel | grond | montagevlak | 50mm | verticaal |
+
+**Gewichtsverdeling en massa — [GEMETEN] 2026-10-22, arm in rust, zonder last:**
+
+| Steunpunt | Belasting | Aandeel |
+|---|---|---|
+| Aandrijfwiel links | 0,55 kg | 34 % |
+| Aandrijfwiel rechts | 0,55 kg | 34 % |
+| Zwenkwiel (150 mm achter de wielas) | 0,50 kg | 31 % |
+| **Totaal** | **1,60 kg** | (gewogen totaalmassa: 1636 g, zie *Ontwerpbasis*) |
+
+- **[BEREKEND]** Zwaartepunt: 0,50 / 1,60 × 150 mm ≈ **47 mm achter de wielas** (momentenevenwicht om de wielas).
+- De **accu zit bewust helemaal achterin** als contragewicht voor de arm: bij tillen met de grijper schuift het zwaartepunt naar voren, gaat er meer last op de aandrijfwielen en minder op het zwenkwiel. Het zwenkwiel daarom **niet** naar voren verplaatsen; het is ook het achterste steunpunt tegen achterover kantelen.
+- **Gevolg voor draaien op de plaats:** het zwenkwiel beschrijft een cirkel met r = 150 mm. Staat het dwars (na een richtingswissel), dan schuift het in plaats van te rollen. Remkoppel ≈ μ × 0,50 kg × 15 cm = **μ × 7,5 kg·cm**, tegen een maximaal aandrijfkoppel van 2 × μ × 0,55 kg × halve spoorbreedte (5,6–6,8 cm) = **μ × 6,2–7,5 kg·cm**. De aandrijfwielen slippen dus eerder dan dat het zwenkwiel schuift, tot het omklapt. Gemeten: `rotate_deg(+360)` op gladde vloer direct na een linksom-beweging gaf 311° (gyro); op een ruwe mat 335° in beide richtingen. Oplossing in software: `rotate_deg_gyro()`; mechanisch: een kogelzwenkwiel (1″ kogel, bv. Pololu #2692 + ~21 mm afstandsstuk).
+- **Voor later (massatraagheid):** met de puntmassa's hierboven ligt het draaipunt bij rotatie op de plaats op de wielas, het zwaartepunt 47 mm daarachter. Een eerste schatting van het traagheidsmoment om de verticale as door het wielasmidden vraagt nog de massaverdeling van accu (positie en massa), motoren en arm; die zijn nog niet apart gewogen.
 
 De robotcontroller is een **Raspberry Pi Pico 2 W** met een **RP2350** microcontroller en een onboard **Infineon CYW43439** wireless controller. In MicroPython wordt deze via de CYW43-driver aangestuurd. De webserver/websocket-besturing gebruikt WiFi; de geplande softwarearchitectuur houdt netwerk- en hoofdcontroltaken op core 0 en reserveert core 1 voor ICM-20948/displaytaken. Deze coreverdeling moet nog als geheel op hardware worden gevalideerd.
 
