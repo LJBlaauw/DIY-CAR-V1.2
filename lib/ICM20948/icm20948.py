@@ -20,6 +20,21 @@ Verschil met de MPU-9250: de assen van de magnetometer worden hier al
 uitgelijnd op die van de accelerometer/gyro (zie AK09916.align). Bij de
 MPU-9250-driver was dat niet zo.
 
+MONTAGE: `mount=(sx, sy, sz)` zet het assenstelsel van de SENSOR om naar dat
+van de KAR (X naar voren, Y naar links, Z omhoog) door per as het teken om te
+draaien. Geldt voor acceleration, gyro en magnetic van het ICM20948-object.
+Huidige montage (2026-10-26, 180 graden om Z): mount=(-1, -1, 1), staat in
+config.json. Alleen tekenwisselingen; een draai van 90 graden (assen
+verwisselen) wordt niet ondersteund.
+
+    sensor.ak09916.magnetic  -> SENSOR-assenstelsel (voor de kalibratiescripts)
+    sensor.magnetic          -> KAR-assenstelsel
+
+De mag-kalibratie (offset/scale) staat in het SENSOR-assenstelsel en wordt
+toegepast VOOR de montage-omzetting. Daardoor blijft een kalibratie geldig als
+de montage-instelling verandert, en hoeven de kalibratiescripts niets van de
+montage te weten.
+
 Datasheets:
   ICM-20948: DS-000189 (TDK InvenSense)
   AK09916:   AKM AK09916C
@@ -112,10 +127,10 @@ CONFIG_PATH = "config.json"
 
 
 def load_mag_calibration(path=CONFIG_PATH):
-    """Lees mag_offset/mag_scale uit de "icm20948"-sectie van config.json.
+    """Lees mag_offset/mag_scale en mount uit de "icm20948"-sectie van config.json.
 
     Ontbreekt de sectie of is het bestand corrupt, dan volgt (0,0,0)/(1,1,1):
-    ongekalibreerd, maar bruikbaar. Bewust geen automatische inlezing in de
+    ongekalibreerd, maar bruikbaar. Ontbreekt alleen "mount", dan (1,1,1). Bewust geen automatische inlezing in de
     constructor: de kalibratiescripts hebben juist ongekalibreerde waarden nodig.
 
         sensor = ICM20948(i2c, **load_mag_calibration())
@@ -125,9 +140,10 @@ def load_mag_calibration(path=CONFIG_PATH):
         with open(path) as f:
             cfg = json.load(f).get("icm20948", {})
         return {"mag_offset": tuple(cfg["mag_offset"]),
-                "mag_scale": tuple(cfg["mag_scale"])}
+                "mag_scale": tuple(cfg["mag_scale"]),
+                "mount": tuple(cfg.get("mount", (1, 1, 1)))}
     except Exception:
-        return {"mag_offset": (0, 0, 0), "mag_scale": (1, 1, 1)}
+        return {"mag_offset": (0, 0, 0), "mag_scale": (1, 1, 1), "mount": (1, 1, 1)}
 
 
 class ICM20948:
@@ -140,6 +156,7 @@ class ICM20948:
         gyro_offset=(0, 0, 0),
         dlpf=DLPF_51HZ,
         ak09916=None, mag_offset=(0, 0, 0), mag_scale=(1, 1, 1),
+        mount=(1, 1, 1),
     ):
         """
         address=None zoekt zelf: 0x69 (AD0 hoog, o.a. Adafruit/SparkFun) en
@@ -148,7 +165,14 @@ class ICM20948:
         mag_offset/mag_scale zijn de hard-/soft-iron-kalibratiewaarden uit
         Calibrate_ICM20948.py. Wordt een eigen `ak09916` meegegeven, dan
         worden die genegeerd.
+
+        mount: teken per as, sensor -> kar (zie de kop van dit bestand).
+        gyro_offset staat in het KAR-assenstelsel (zoals calibrate() hem bepaalt).
         """
+        for v in mount:
+            if v not in (1, -1):
+                raise ValueError("mount moet uit +1/-1 bestaan, kreeg %r" % (mount,))
+        self._mount = tuple(mount)
         self.i2c = i2c
         self._bank = -1
         self.address = self._find(address)
@@ -190,22 +214,26 @@ class ICM20948:
         """(x, y, z) in m/s^2, of in g bij accel_sf=SF_G."""
         so = self._accel_so
         sf = self._accel_sf
-        xyz = self._read_three_shorts(_ACCEL_XOUT_H)
-        return tuple([value / so * sf for value in xyz])
+        m = self._mount
+        x, y, z = self._read_three_shorts(_ACCEL_XOUT_H)
+        return (m[0] * x / so * sf, m[1] * y / so * sf, m[2] * z / so * sf)
 
     @property
     def gyro(self):
         """(x, y, z) in rad/s, of in graden/s bij gyro_sf=SF_DEG_S."""
         so = self._gyro_so
         sf = self._gyro_sf
+        m = self._mount
         ox, oy, oz = self._gyro_offset
         x, y, z = self._read_three_shorts(_GYRO_XOUT_H)
-        return (x / so * sf - ox, y / so * sf - oy, z / so * sf - oz)
+        return (m[0] * x / so * sf - ox, m[1] * y / so * sf - oy, m[2] * z / so * sf - oz)
 
     @property
     def magnetic(self):
-        """(x, y, z) in uT, in het assenstelsel van de accelerometer/gyro."""
-        return self.ak09916.magnetic
+        """(x, y, z) in uT, gekalibreerd, in het KAR-assenstelsel (na mount)."""
+        m = self._mount
+        x, y, z = self.ak09916.magnetic
+        return (m[0] * x, m[1] * y, m[2] * z)
 
     @property
     def temperature(self):

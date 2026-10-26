@@ -28,15 +28,20 @@
   },
   "icm20948": {
     "mag_offset": [
-      -42.75,
-      33.45,
-      -3.22
+      -41.55,
+      -2.55,
+      -2.25
     ],
     "mag_scale": [
-      1.1973,
-      0.8755,
-      0.9779
+      1.0229,
+      0.998,
+      0.98
     ],
-    "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916 (X naar voren, Z omhoog), handkalibratie 2026-10-22 met de NIEUWE module (de eerste is defect geraakt bij het solderen van de INT-draad), motordrivers UIT: |B| 49,5 uT, spreiding 7%. KOMPAS VOORLOPIG GEPARKEERD: een gyro-gerefereerde draaitest op de vloer gaf +/-15-20 graden koersfout. Oorzaken: de sensor zit achterin naast de accu (stalen cellen op 20 mm, accukabels: ~10 uT per ampere op 2 cm) en beschrijft bij draaien op de plaats een cirkel van ~30 cm door het ongelijke veld van vloer/meubels. Motoren en servo's (100-150 mm) storen niet merkbaar (test met wielen vrij: <0,7 uT). Een mast boven de wielas kan niet (servoarm). Beste alternatief: onder het chassis midden tussen de aandrijfwielen. Koers: gebruik de gyro (rotate_deg_gyro)."
+    "mount": [
+      -1,
+      -1,
+      1
+    ],
+    "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916, begeleide kalibratie 2026-10-26 (tests/test_icm20948_calibrate.py, 4 stappen Z/X/Y/achtje, op de vloer, motordrivers UIT): bereik per as 96-100 uT, |B| 48,2 uT, spreiding 2,9 % (1 sigma, 1911 metingen). Sensor op 150 mm paaltje achterin (140 mm achter de wielas, 40 mm uit het midden), 180 graden om Z gedraaid t.o.v. eerder: sensor-X wijst naar ACHTEREN, Y naar RECHTS, Z omhoog. Deze offsets staan in het SENSOR-assenstelsel en worden toegepast VOOR \"mount\" ([-1,-1,1]: sensor -> kar, X naar voren, Y naar links, Z omhoog); bij een andere montage alleen \"mount\" aanpassen, niet opnieuw kalibreren. Stroomstoring op deze plek (wielen vrij): houdstroom 0,28 uT, draaiend 0,24 uT -> verwaarloosbaar."
   }
 }
