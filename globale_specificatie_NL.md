@@ -23,7 +23,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 4. **Grijpen** — Bestuur twee scharnier-servo's zodat de arm het voorwerp bereikt.
 5. **Sluiten grijper** — Servo 4 met stroombeperking (PI-limiter) zodat de servo niet overbelast raakt.
 6. **Terugkeren** — Omdraaien en via opgeslagen wielodometrie/trajectinformatie terug naar de startpositie; voorwerp neerzetten. De nauwkeurigheid hiervan wordt begrensd door cumulatieve odometriefout en wielslip.
-7. **IMU-ondersteuning (ICM-20948)** — gyro en magnetometer kunnen de oriëntatie/koers ondersteunen. Ze leveren geen absolute X/Y-positie. Het oorspronkelijke "GY-9250"-bordje bleek bij hardwarevalidatie (2026-09-19) een kale MPU-6500 zonder magnetometer (zie *Bekende issues/TODO*). Als vervanger is een **ICM-20948** besteld: opvolger van de MPU-9250, met de AK09916-magnetometer in dezelfde behuizing. Driver en scripts staan in `lib/ICM20948/` (`icm20948.py`, `ICM20948_basic.py`, `ICM20948_fusion.py`, kalibratiescripts); validatie op hardware volgt na levering. Tot dan draait de koerscorrectie (`stepper_ramp.py`, cascade LDR+gyro) nog op het MPU-6500-bordje met de oude driver in `lib/GY9250/`.
+7. **IMU-ondersteuning (ICM-20948)** — gyro en magnetometer ondersteunen de oriëntatie/koers; ze leveren geen absolute X/Y-positie. Het oorspronkelijke "GY-9250"-bordje bleek bij hardwarevalidatie (2026-09-19) een kale MPU-6500 zonder magnetometer (zie *Bekende issues/TODO*) en is vervangen door een **ICM-20948** (opvolger van de MPU-9250, AK09916-magnetometer in dezelfde behuizing). Driver en scripts staan in `lib/ICM20948/` (`icm20948.py`, `ICM20948_basic.py`, `ICM20948_fusion.py`, `fusion.py`, kalibratiescripts). Gemonteerd op een 150mm mast achterin (buiten de zwaai van de servo-arm), gekalibreerd en in gebruik; het kompas is binnenshuis bruikbaar tot op ca. ±5°. De oude MPU-6500-driver (`lib/GY9250/`) is verwijderd — koerscorrectie (`stepper_ramp.py`, cascade LDR+gyro) gebruikt nu overal de ICM-20948.
 
 ---
 
@@ -178,13 +178,9 @@ Dual stappenmotor controller op basis van PIO. Beide motoren lopen onafhankelijk
 - De teller-SM telt STEP-flanken en genereert een IRQ als het doel bereikt is.
 - IRQ-handler stopt de bijbehorende motor-SM en werkt de softwarepositie bij.
 
-**Beperking:** er is geen ramp. De snelheid wordt in één keer gecommandeerd, dus vanuit stilstand moet de rotor binnen één microstap (78 µs) naar de eindsnelheid springen. Dat is een oneindige versnelling: de rotor kan het veld niet volgen, verliest synchronisme en de motor blijft zoemend staan. Dit is een **synchronisme-fout, geen koppel-fout** — zie de koppelbegroting hieronder. `stepper_ramp.py` of `stepper_rmp.py`lost dit op.
+**Beperking:** er is geen ramp. De snelheid wordt in één keer gecommandeerd, dus vanuit stilstand moet de rotor binnen één microstap (78 µs) naar de eindsnelheid springen. Dat is een oneindige versnelling: de rotor kan het veld niet volgen, verliest synchronisme en de motor blijft zoemend staan. Dit is een **synchronisme-fout, geen koppel-fout** — zie de koppelbegroting hieronder. `stepper_ramp.py` lost dit op.
 
 ---
-
-### `lib/stepper/stepper_rmp.py`
-
-Dual stappenmotor controller **met ramp** (PIO + DMA) zelfde functie als `stepper.py` maar nu met ramp.
 
 ### `lib/stepper/stepper_ramp.py`
 
@@ -423,7 +419,7 @@ Als regressie ook de drie toestandsfouten die hierin zaten: `finish()` tijdens d
   - `LDR_DIFF_SIGN` (+1 / −1): houd een lamp rechts van de kar — `ldr_diff()` moet **positief** zijn.
 - `CYCLES_FIXED = 13`: de vaste PIO-cyclusoverhead **per stap binnen een segment** (STEP hoog `mov[7]` + `nop[2]` = 11, delaylus = delay + 1, `jmp(y_dec)` = 1). De STEP-puls was eerst 3 cycles (200 ns); daarmee miste de TMC2209 ~40 % van de pulsen (`rotate_deg(+90)` draaide 54°). Met 733 ns, zoals `stepper.py`: 90,8° (gemeten 2026-10-21). Daar komt per **segmentovergang** nog 4 cycles bij voor `pull`/`out`/`out`/`mov`, die niet in de formule zitten; de effectieve overhead is dus `13 + 4/repeat`. Bij de 256 rampsegmenten is dat 0,02 %, bij segmenten van 1 stap 0,4 %. De waarde is **berekend, nog niet gemeten**. `meet_frequentie()` vergelijkt de werkelijke STEP-frequentie met `_delay_for()`; meet zowel lange segmenten als segmenten van 1, 2, 8 en 256 stappen, en controleer met een **logic analyzer** ook de pulsbreedte (verwacht 733 ns) en of er stappen wegvallen.
 - Maximale startsnelheid en maximale versnelling, met de ICM-20948 als onafhankelijke referentie (de PIO-teller kan een stall niet zien). De aangenomen 0,1 omw/s is conservatief — 20 volle stappen/s ligt ruim binnen het pull-in gebied van elke NEMA 17.
-- **Snelheidsverdubbeling (2026-09-19).** Met VREF 1,0→1,5 V en de motor nu ook echt op 24 V i.p.v. eerdere 12V-bankproeven is `V_MAX_CM_S` elektrisch ruim onderbouwd te verdubbelen (19,1 → 38,2 cm/s, zie *Ontwerpbasis*/koppelbegroting hierboven) — bewust nog niet doorgevoerd in `stepper_ramp.py`/`stepper_ramp_v2.py`/`stepper_rmp.py`, want dat verandert ook ramptijd, remweg (`stopping_distance_cm()`) en alle kentallen die op 19,1 cm/s gebaseerd zijn. Eerst hier valideren, dan pas `V_MAX_CM_S` aanpassen én de kentallen-tabel herzien.
+- **Snelheidsverdubbeling (2026-09-19).** Met VREF 1,0→1,5 V en de motor nu ook echt op 24 V i.p.v. eerdere 12V-bankproeven is `V_MAX_CM_S` elektrisch ruim onderbouwd te verdubbelen (19,1 → 38,2 cm/s, zie *Ontwerpbasis*/koppelbegroting hierboven) — bewust nog niet doorgevoerd in `stepper_ramp.py`, want dat verandert ook ramptijd, remweg (`stopping_distance_cm()`) en alle kentallen die op 19,1 cm/s gebaseerd zijn. Eerst hier valideren, dan pas `V_MAX_CM_S` aanpassen én de kentallen-tabel herzien.
 - Regelversterkingen `kp_ldr` en `kp_gyro`. De standaard `kp_ldr = 25` geeft bij een vol LDR-verschil 25 °/s, net onder het plafond van 32,2 °/s, dus de regelaar verzadigt normaal niet.
 - `fifo_join=PIO.JOIN_TX` is **niet** gebruikt (niet geverifieerd in deze MicroPython-versie). Werkt het, dan verdubbelt de FIFO-runway van 60 naar 140 ms.
 

@@ -7,8 +7,9 @@ magnetometer (kompas). De magnetometer zit op een interne I2C-bus; deze
 driver zet de BYPASS-modus aan zodat de AK09916 direct op de externe bus op
 adres 0x0C verschijnt.
 
-De publieke API volgt bewust die van de Tuupola-driver (lib/GY9250/mpu9250.py),
-zodat bestaande code (fusion.py, stepper_ramp.gyro_z_deg_s) ongewijzigd werkt:
+De publieke API volgt bewust die van de vroegere Tuupola-driver (voor de
+inmiddels vervangen MPU-6500, zie globale_specificatie_NL.md), zodat
+bestaande code (fusion.py, stepper_ramp.gyro_z_deg_s) ongewijzigd werkt:
 
     sensor.acceleration  -> (x, y, z) in m/s^2   (SF_G voor g)
     sensor.gyro          -> (x, y, z) in rad/s   (SF_DEG_S voor graden/s)

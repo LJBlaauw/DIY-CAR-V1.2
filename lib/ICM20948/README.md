@@ -21,7 +21,7 @@ I2C1: SDA = GPIO10, SCL = GPIO11. Het adres van de ICM-20948 hangt af van pin AD
 
 ## Gebruik
 
-De API is gelijk aan die van de Tuupola MPU-9250-driver in `lib/GY9250/`:
+De API is gelijk aan die van de vroegere Tuupola MPU-9250-driver (voor het inmiddels vervangen MPU-6500-bordje):
 
 ```python
 import machine
