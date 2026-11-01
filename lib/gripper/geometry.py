@@ -8,12 +8,44 @@
 # geen hardware, geen imports — zodat hij overal en ook op de PC te testen is.
 #
 # De kaken sluiten HORIZONTAAL, maar de vingertoppen bewegen daarbij naar VOREN.
-# Gemeten: maximaal open (8,7 cm) -> toppen 12 cm vóór de ultrasoon;
-#          bijna dicht  (2 cm) -> toppen 15 cm vóór de ultrasoon.
+# Gemeten (2026-10-31, arm volledig gestrekt J1=J2=180°): rust/maximaal open
+# (J10=3% PWM) -> 8,5 cm, toppen 11 cm vóór de ultrasoon.
 #
-# LET OP: tip_pos_cm() is een RECHTE door die twee meetpunten. Een
-# vierstangenmechanisme geeft in werkelijkheid een kromme; één extra meting bij
-# ~5 cm opening laat zien hoeveel dat afwijkt.
+# Rust draait het vingerscharnier een stukje VOORBIJ de 90°-referentiestand:
+# bij het scharnier exact op 90° meet je wél 8,7 cm/12 cm (de oudere waarden).
+# Dat is geen meetfout maar het vierstangenmechanisme zelf: de horizontale
+# projectie van de vinger heeft een top bij 90° scharnierhoek en neemt
+# daarna weer af (cosinus-vormig), dus "verder open draaien" voorbij 90°
+# klapt de opening juist een beetje terug. Omdat GRIP_OPEN_CM hier bedoeld is
+# als "wat er gebeurt bij rust" (niet "bij 90°"), zijn de constanten op de
+# rust-meting gezet; rest_pct is bewust NIET aangepast (laat de volle
+# mechanische slag van de servo intact).
+#
+# LET OP: tip_pos_cm() is een RECHTE door twee meetpunten. Een
+# vierstangenmechanisme geeft in werkelijkheid een kromme.
+#
+# Derde meetpunt gedaan (2026-10-31, J4 label 78 graden, opening 7,5cm):
+# gemeten top-tot-ultrasoon 13,5cm tegen 11,56cm voorspeld door de rechte
+# lijn -- 1,94cm (17%) afwijking, veel meer dan de ~2% die bij de
+# armkinematica-validatie werd gevonden. Verklaring: de vinger VERSCHUIFT
+# (geen rotatie) langs een cirkelboog, dus x (top-tot-ultrasoon) en y (halve
+# opening) zijn beide een cosinus/sinus van HETZELFDE scharnierhoek, met 90
+# graden faseverschil. Rust zit al dicht bij de top van de sinus (vandaar
+# 8,5 i.p.v. 8,7cm, zie hierboven) -- en precies daar is de cosinus (x) het
+# steilst. Een rechte lijn tussen twee punten in opening-ruimte is dus
+# fundamenteel de verkeerde vorm, niet alleen een ruwe benadering, en de
+# fout is het grootst juist in het praktisch relevante midden-gebied
+# (objectbreedtes 3-8cm liggen allemaal in dat midden).
+#
+# Cirkelboog-fit op de 3 meetpunten (x=tip_cm, y=opening_cm/2): middelpunt
+# (11,51; 0,29), straal 3,99cm -- opvallend dicht bij de ONTWORPEN balklengte
+# van het parallellogram (4,2cm, zie hierboven), wat de cirkelboog-hypothese
+# sterk onderbouwt. GEEN vervangformule ingebouwd: het dichte-eind-meetpunt
+# (0,5cm) ligt dicht bij het x-extreem van deze cirkel, en met maar 3
+# ruisgevoelige handmetingen is niet zeker hoe de boog zich daar precies
+# gedraagt. Een betrouwbare vervanger vraagt meer meetpunten (vooral rond de
+# dichte kant) of een herleiding uit de bekende mechanismematen in plaats van
+# een fit op drie losse metingen -- bewust niet vandaag gedaan.
 #
 # Tijdens het rijden staan de servo's in rustpositie: de kaken liggen dan ACHTER
 # de ultrasoon en vallen buiten de bundel, dus de afstandsmeting is dan zuiver.
@@ -22,12 +54,33 @@
 # vingers en is er GEEN terugkoppeling meer.
 # ================================================================
 
-GRIP_OPEN_CM  = 8.7      # kaakopening maximaal open (J10=3% PWM). Was 9.0cm
-                         # (ruwe schatting); 8,7cm is de exact gemeten waarde
-                         # (2026-09-21).
-GRIP_MIN_CM   = 2.0      # kaakopening bijna dicht
-TIP_NEAR_CM   = 12.0     # toppen t.o.v. ultrasoon bij maximaal open
-TIP_FAR_CM    = 15.0     # toppen t.o.v. ultrasoon bij bijna dicht
+GRIP_OPEN_CM  = 8.5      # kaakopening bij rust (J10=3% PWM). Herijkt 2026-10-31
+                         # (was 8,7cm, 2026-09-21): bij het scharnier exact op
+                         # 90° is het wel 8,7cm, maar rust draait er net voorbij
+                         # (zie toelichting hierboven). 8,5cm is wat er bij
+                         # rust werkelijk gebeurt.
+GRIP_MIN_CM   = 0.5      # kaakopening dicht (J10=8,6% PWM), gemeten tussen de
+                         # VINGERTOPPEN. Herijkt 2026-10-31 (was 2,0cm; de
+                         # werkelijke tip-tip-afstand is maar 5mm, niet 2cm).
+TIP_NEAR_CM   = 11.0     # toppen t.o.v. ultrasoon bij rust. Herijkt 2026-10-31
+                         # (was 12,0cm), zelfde reden als GRIP_OPEN_CM hierboven.
+TIP_FAR_CM    = 15.5     # toppen t.o.v. ultrasoon bij dicht. Herijkt 2026-10-31
+                         # (was 15,0cm).
+
+# Elke vinger heeft een symmetrische CONCAVE uitsparing in het midden (niet aan
+# de top): bij dicht geeft dat halverwege de vinger een opening van 8mm, tegen
+# 5mm (GRIP_MIN_CM) aan de toppen zelf. Bedoeld om kleine/ronde voorwerpen
+# tussen de uitsparingen vast te houden i.p.v. alleen op de toppen te pinchen.
+# Nog niet in een apart kengetal verwerkt -- puur ter documentatie.
+
+# Vingerlengte (scharnier -> top): 2,7 cm (gemeten 2026-10-31). Dit is de
+# eigenlijke "kaakdiepte": twee vingers die vanaf de zijkant tot in het hart
+# van een voorwerp moeten reiken, kunnen dus samen maximaal 2 x 2,7 = 5,4 cm
+# overbruggen. Voorwerpen BREDER dan 5,4 cm kunnen niet met de vingertoppen
+# voorbij het midden grijpen -- let op: de huidige default OBJECT_W_CM (6,0cm,
+# zie hieronder) ligt daar AL OVER. Voor zo'n voorwerp pinchen de toppen alleen
+# het oppervlak, zonder om het midden heen te reiken -- minder stabiele greep,
+# geen harde onmogelijkheid.
 OBJECT_W_CM   = 6.0      # aangenomen objectbreedte; per missie te overschrijven
 
 
@@ -47,8 +100,11 @@ def stop_dist_cm(object_w_cm=None):
     stopafstand. Smaller betekent verder sluiten, dus meer vooruitgang van de
     toppen, dus moet de kar verder terug blijven staan.
 
-        3 cm -> 14,6 cm      6 cm -> 13,3 cm
-        5 cm -> 13,7 cm      8 cm -> 12,4 cm
+    Herijkt 2026-10-31 (GRIP_OPEN_CM/GRIP_MIN_CM/TIP_NEAR_CM/TIP_FAR_CM, zie
+    hierboven):
+
+        3 cm -> 14,1 cm      6 cm -> 12,4 cm
+        5 cm -> 13,0 cm      8 cm -> 11,3 cm
     """
     return tip_pos_cm(OBJECT_W_CM if object_w_cm is None else object_w_cm)
 
@@ -57,15 +113,20 @@ def grip_window_cm(object_w_cm=None):
     """(min, max) ultrasoonafstand waarbij het voorwerp nog gegrepen wordt.
 
     Het voorwerp wordt gegrepen zolang de toppen er langs vegen terwijl de
-    opening nog ruimer is dan het voorwerp. De vooruitgang van 3 cm is dus een
-    gratis venster bovenop de stopnauwkeurigheid:
+    opening nog ruimer is dan het voorwerp. De vooruitgang van 4,5 cm (TIP_FAR_CM
+    - TIP_NEAR_CM) is dus een gratis venster bovenop de stopnauwkeurigheid.
+    Herijkt 2026-10-31:
 
-        3 cm breed -> 2,6 cm venster      7 cm breed -> 0,9 cm venster
-        5 cm breed -> 1,7 cm venster      8 cm breed -> 0,4 cm venster
+        3 cm breed -> 3,1 cm venster      7 cm breed -> 0,8 cm venster
+        5 cm breed -> 2,0 cm venster      8 cm breed -> 0,3 cm venster
 
-    De ondergrens is conservatief TIP_NEAR_CM. De werkelijke ondergrens ligt
-    lager en wordt bepaald door de KAAKDIEPTE (palm t.o.v. toppen), die nog niet
-    is opgemeten.
+    De ondergrens is conservatief TIP_NEAR_CM. De werkelijke ondergrens kan
+    lager, bepaald door de KAAKDIEPTE (vingerlengte scharnier->top, gemeten
+    2026-10-31: 2,7 cm) -- in principe tot TIP_NEAR_CM - 2,7 = 8,3 cm, zodra de
+    vingers over de objectrand heen mogen reiken i.p.v. er alleen tegenaan te
+    komen. Nog NIET verwerkt in de return hieronder: vraagt een bewuste
+    ontwerpkeuze (grijpt de vinger dan om het voorwerp, of raakt de palm het
+    eerst?), dus voorlopig bij de conservatieve TIP_NEAR_CM gelaten.
     """
     return TIP_NEAR_CM, stop_dist_cm(object_w_cm)
 
@@ -79,15 +140,19 @@ def lateral_tolerance_cm(object_w_cm=None):
     daarom uit BOVEN het voorwerp en laat hem zakken; dan komen de kaken er
     van boven om heen in plaats van er horizontaal in.
 
-        3 cm -> +/- 3,0 cm      6 cm -> +/- 1,5 cm
-        5 cm -> +/- 2,0 cm      7 cm -> +/- 1,0 cm
+    Herijkt 2026-10-31 (GRIP_OPEN_CM 8,7->8,5cm):
+
+        3 cm -> +/- 2,75 cm      6 cm -> +/- 1,25 cm
+        4 cm -> +/- 2,25 cm      7 cm -> +/- 0,75 cm
+        5 cm -> +/- 1,75 cm      8 cm -> +/- 0,25 cm
     """
     w = OBJECT_W_CM if object_w_cm is None else object_w_cm
     return 0.5 * (GRIP_OPEN_CM - w)
 
 
-# 13,29 cm bij een voorwerp van 6 cm. Rond dit NIET af naar 13 cm: bij een
-# gemikte eindnauwkeurigheid van ~0,3 cm is 0,3 cm afronding de hele foutbegroting.
+# 12,41 cm bij een voorwerp van 6 cm (herijkt 2026-10-31; was 13,29cm). Rond
+# dit NIET af: bij een gemikte eindnauwkeurigheid van ~0,3 cm is 0,3 cm
+# afronding de hele foutbegroting.
 STOP_DIST_CM = tip_pos_cm(OBJECT_W_CM)
 
 

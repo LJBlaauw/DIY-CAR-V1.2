@@ -6,17 +6,22 @@ from ssd1306 import SSD1306_I2C
 # --- Testscript: Servo (elk naar 90 graden, in botsingsveilige volgorde) ---
 # OLED (SSD1306): GPIO0 (SDA0) / GPIO1 (SCL0) -> I2C-bus 0
 #
-# MECHANISCHE RANDVOORWAARDE (2026-09-19, gebruiker): staat servo 1 (schouder,
-# J1) in rust, dan maakt servo 2 (elleboog, J2) al bij >ca. 30 graden vanuit
-# ZIJN rust contact met het controlbord (PCB). Dit is een fysieke botsing,
-# geen timing-kwestie -- de servo's bewegen precies zoals gecommandeerd.
+# MECHANISCHE RANDVOORWAARDEN -- TWEE, TEGENSTRIJDIGE BOTSINGEN:
 #
-# Veilige volgorde, in beide richtingen:
-#   heen : J1 eerst naar 90 graden (uit de weg), DAARNA pas J2 naar 90 graden.
-#   terug: J2 EERST terug naar rust (J1 staat dan nog op 90, dus veilig),
-#          J1 DAARNA pas terug naar rust.
-# Nooit J1 op rust laten staan terwijl J2 >30 graden van zijn rust af staat --
-# dat geldt voor de TOESTAND, ongeacht welke servo als laatste bewoog.
+# 1) (2026-09-19, gebruiker) Staat servo 1 (schouder, J1) in rust, dan maakt
+#    servo 2 (elleboog, J2) al bij >ca. 30 graden vanuit ZIJN rust contact
+#    met het controlbord (PCB).
+# 2) (2026-10-31, gebruiker, hardwaretest tot 180 graden) Beweegt J1 alléén
+#    naar een grote hoek terwijl J2 nog in rust staat, dan loopt de hand (de
+#    grijperservo zit onder de vingers) tegen de ULTRASOONSENSOR aan. Zodra
+#    J2 ook beweegt komt hij vanzelf los.
+#
+# Deze twee sluiten een EENZIJDIGE volgorde (eerst de ene servo helemaal,
+# dan de andere) uit in beide richtingen: "J1 rust + J2 weg" botst op het
+# controlbord, "J1 weg + J2 rust" botst op de ultrasoon. De enige veilige
+# weg is dus J1 en J2 GELIJKTIJDIG bewegen (zelfde starttijd, zelfde
+# snelheid/aankomsttijd), nooit de ene laten uitlopen voordat de andere
+# start.
 #
 # Servo 4 (J10, grijper) heeft ANDERE beperkingen (eigen open/dicht-bereik,
 # stroomlimiet via servo_cur_limit) en zit niet in deze botsingsketen; die
@@ -93,10 +98,32 @@ def naar_rust(nr, label):
     print(f"Servo {nr} ({label}): pos={s['pos_deg']:.1f} graden")
 
 
+def naar_hoek_samen():
+    """J1 (schouder) en J2 (elleboog) GELIJKTIJDIG naar TEST_HOEK_GRADEN --
+    zie de botsingsrandvoorwaarden bovenaan: geen van beide mag op de ander
+    vooruitlopen."""
+    print(f"--- Servo 1+2 (schouder+elleboog): gelijktijdig naar {TEST_HOEK_GRADEN} graden ---")
+    sc.servo_pos(1, TEST_HOEK_GRADEN, SNELHEID_GRAD_S)
+    sc.servo_pos(2, TEST_HOEK_GRADEN, SNELHEID_GRAD_S)
+    wacht_tot_klaar(sc, 1)
+    wacht_tot_klaar(sc, 2)
+    print(f"Servo 1: pos={sc.servos[1]['pos_deg']:.1f}  Servo 2: pos={sc.servos[2]['pos_deg']:.1f} graden")
+
+
+def naar_rust_samen():
+    """J1 en J2 GELIJKTIJDIG terug naar rust -- zelfde reden als hierboven."""
+    print("--- Servo 1+2 (schouder+elleboog): gelijktijdig terug naar rust ---")
+    sc.servo_rest(1, SNELHEID_GRAD_S)
+    sc.servo_rest(2, SNELHEID_GRAD_S)
+    wacht_tot_klaar(sc, 1)
+    wacht_tot_klaar(sc, 2)
+    print(f"Servo 1: pos={sc.servos[1]['pos_deg']:.1f}  Servo 2: pos={sc.servos[2]['pos_deg']:.1f} graden")
+
+
 try:
-    # HEEN: J1 eerst weg van rust, pas dan J2 -- zie de uitleg bovenaan.
-    naar_hoek(1, "schouder")
-    naar_hoek(2, "elleboog")
+    # HEEN: J1 en J2 gelijktijdig, dan pas de grijper (onafhankelijk, geen
+    # deel van deze botsingsketen) -- zie de uitleg bovenaan.
+    naar_hoek_samen()
     naar_hoek(4, "grijper")
     time.sleep(1)
 
@@ -106,12 +133,9 @@ except KeyboardInterrupt:
     toon(["Servo test", "Gestopt."])
     print("Test gestopt.")
 finally:
-    # TERUG: exact omgekeerde, botsingsveilige volgorde -- J2 EERST terug
-    # naar rust (J1 staat dan nog op de testhoek, dus veilig), J1 DAARNA.
-    # Grijper (J4) is onafhankelijk.
+    # TERUG: grijper eerst (onafhankelijk), dan J1+J2 weer gelijktijdig.
     try:
-        naar_rust(2, "elleboog")
-        naar_rust(1, "schouder")
         naar_rust(4, "grijper")
+        naar_rust_samen()
     except KeyboardInterrupt:
         print("Nogmaals onderbroken tijdens opruimen; controleer de servoposities handmatig.")

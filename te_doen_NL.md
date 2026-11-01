@@ -97,7 +97,7 @@ De oorspronkelijke code voor de ICM-20948 kwam van awesome-micropython (auteur T
 
 # stepper omzetten naar 1/64 microstepping (12800 stappen/omw)
 **De microstepping is van 1/8 (1600 stappen/omw) naar 1/64 (12800 stappen/omw) gebracht, o.a. om de stepper-ramp gladder en eenvoudiger te kunnen implementeren (kleinere snelheidssprong per puls).**
- 1. MS-bedrading fysiek verifiëren: TMC2209 MS1 → GND, MS2 → +5V (10 kΩ pull-ups verwijderd). Waarheidstabel: MS2=H/VIO, MS1=L/GND → 1/64.
+ 1. ~~MS-bedrading fysiek verifiëren: TMC2209 MS1 → GND, MS2 → +5V (10 kΩ pull-ups verwijderd). Waarheidstabel: MS2=H/VIO, MS1=L/GND → 1/64.~~ **Gedaan (2026-11-01):** bedrading klopt.
  2. ~~In `lib/stepper/stepper.py` `STEPS_REV = 12800` zetten.~~ **Gedaan.** `CM_PER_STEP ≈ 14,9 µm/stap` (na correctie van `WHEEL_CIRC` naar de gemeten 19,1 cm).
  3. `OVERHEAD` in `speed_to_delay()` hermeten: bij 8× meer pulsen wordt de vaste overhead een groter aandeel van de delay (~11% bij 30 cm/s) → snelheidsafwijking. Alternatief/aanvullend: `F_PIO` verhogen (fijnere resolutie, verwaarloosbare overhead).
  4. Randvoorwaarde bij het verhogen van `F_PIO`: de STEP-puls moet ≥ ± 100 ns hoog/laag blijven (TMC2209-minimum); eventueel een extra `nop` in de PIO-puls houden.

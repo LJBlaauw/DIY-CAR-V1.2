@@ -32,15 +32,25 @@ LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB,
 # lib/stepper/stepper_ramp.py. Geschiedenis: 18,5 cm gaf 503° bij een 370°-scan;
 # de geometrische 13,6 cm (hart-op-hart) gaf nog ~21% te veel (gyro 2026-10-21:
 # 434,9° bij 360°), omdat het doorgezakte frame de banden op de binnenrand laat
-# lopen. 11,26 cm is de gemeten EFFECTIEVE spoorbreedte. Een eventuele
-# restcorrectie die alleen voor de scan geldt, hoort in ROT_SCALE.
-WHEEL_BASE_CM        = 11.26
+# lopen. 11,26 cm was de gemeten EFFECTIEVE spoorbreedte met de oude banden.
+# HERIJKT 2026-11-01 na de nieuwe TPU-banden: 12,20 cm, en NOGMAALS HERIJKT
+# dezelfde dag naar 13,66 cm toen bleek dat het afstellen van het zwenkwiel
+# zelf WHEEL_CIRC had verschoven (19,1 -> 21,33 cm) — TRACK_WIDTH_EFF/
+# WHEEL_BASE_CM schaalt daarmee proportioneel mee (zie TRACK_WIDTH_EFF in
+# lib/stepper/stepper_ramp.py voor de volledige toelichting en meting).
+# Een eventuele restcorrectie die alleen voor de scan geldt, hoort in ROT_SCALE.
+WHEEL_BASE_CM        = 13.66
 ROT_SCALE            = 1.0
-# Correctie per draairichting, bovenop ROT_SCALE. Gemeten 2026-10-21 met
-# stepper.rotate() 360° bij 5 cm/s: rechtsom gyro 360,0°, linksom 370,1° en
-# 369,8° (laserstip 8 cm verder op 50 cm = 9,1°). Linksom draait de kar dus
-# ~2,7% verder, waarschijnlijk door zwenkwiel/gewichtsverdeling.
-ROT_SCALE_L          = 360.0 / 369.95
+# Correctie per draairichting, bovenop ROT_SCALE. HERMETEN 2026-11-01 na de
+# nieuwe TPU-banden (kompasmeting rotate_deg(+-360)): rechtsom 357,1°, linksom
+# 357,6° -> beide ~1,007-1,008, binnen de kompasruis (±5°) van elkaar en van
+# 1,0. De links/rechts-asymmetrie van de oude banden (hieronder, 2,7%) is met
+# het nieuwe profielloze/gekroonde loopvlak kennelijk verdwenen -> geen
+# richtingsafhankelijke correctie meer nodig. Oude meting (2026-10-21, OUDE
+# banden) met stepper.rotate() 360° bij 5 cm/s: rechtsom gyro 360,0°, linksom
+# 370,1° en 369,8° (laserstip 8 cm verder op 50 cm = 9,1°) -> toen ~2,7%
+# verschil, waarschijnlijk door zwenkwiel/gewichtsverdeling.
+ROT_SCALE_L          = 1.0
 ROT_SCALE_R          = 1.0
 
 # LDR instellingen

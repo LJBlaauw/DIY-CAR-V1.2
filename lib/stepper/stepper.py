@@ -49,12 +49,30 @@ def stepper_counter():
 # -----------------------------------------
 F_PIO = 15_000_000         # 150 MHz sysclk / 10 → integer klokdeler (geen fractionele jitter).
                            # STEP-puls blijft 11 cycles = 733 ns ≥ 100 ns (TMC2209-minimum).
-WHEEL_CIRC   = 19.1        # cm — gemeten omtrek (was 20.94; die gaf 8,8% te korte afstanden)
+WHEEL_CIRC   = 21.33       # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
+                             # (los van de bandenwissel) gaf 30cm gecommandeerd op het meetlint
+                             # 33,5cm werkelijk, bij twee verschillende snelheden (19,1 en
+                             # 24cm/s) — dus geen snelheidsafhankelijke slip, maar een
+                             # verschoven effectieve rolomtrek door de zwenkwiel-afstelling.
+                             # 19,1 x 33,5/30 = 21,33. Was 19,1 (was 20,94; die gaf 8,8% te
+                             # korte afstanden).
 TRACK_WIDTH  = 13.6        # cm — geometrische spoorbreedte hart-op-hart (alleen documentatie)
-TRACK_WIDTH_EFF = 11.26      # cm — EFFECTIEVE spoorbreedte, gemeten 2026-10-21: rotate 360°
-                             # links gaf 434,9° op de ICM-20948-gyro (kompas ~420°). Het ASA-
-                             # frame zakt onder accu/motoren door, de banden lopen op de
-                             # binnenrand van het loopvlak. 13,6 x 360 / 434,9 = 11,26.
+TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
+                             # 21,33/19,1 = 13,62), daarna kompasmeting rotate_deg(360) (met de
+                             # gecorrigeerde WHEEL_CIRC=21,33): 352,7° (-7,3°) -> 13,90; een
+                             # derde meting over 3 omwentelingen (1080°, betere signaal/ruis)
+                             # gaf 1099,0° (+19°) -> 13,66 — binnen de kompasruis van de
+                             # 13,62/13,90-tussenstappen, dus hier geconvergeerd.
+                             # Geschiedenis (met de OUDE
+                             # WHEEL_CIRC=19,1): HERIJKT 2026-11-01 na de nieuwe TPU-banden via
+                             # het kompas (ICM-20948). Iteratief verfijnd: eerste rotate_deg(360)
+                             # met de oude 11,26 kwam maar tot 321,9° (-38,1°, visueel bevestigd
+                             # "ca 30 graden te weinig") -> 12,59; herhaling met 12,59 gaf nog
+                             # +9,95° op 360° -> 12,25; een derde meting over 3 omwentelingen
+                             # (1080°, betere signaal/ruis t.o.v. de ±5° kompasruis) gaf +34,85°
+                             # -> 12,20. Was 11,26 (gemeten 2026-10-21 met de oude banden: rotate
+                             # 360° links gaf 434,9° op de gyro, kompas ~420°; 13,6 x 360 /
+                             # 434,9 = 11,26).
 STEPS_REV    = 12800       # 1/64 microstepping (TMC2209: 200 volle stappen × 64; MS1→GND, MS2→+5V)
 CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 14,9 µm/stap
 STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ≈ 132 stappen verschil per graad koers

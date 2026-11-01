@@ -61,8 +61,16 @@ SAMPLE_INTERVAL_MS = 1         # 10 x 1 ms = 10 ms = één 100Hz-netperiode
 CSV_DIR = "/"
 
 # Startwaarden; worden overschreven door gamma() en bundel()
-GAMMA = 0.7                   # LDR-exponent, R ~ E^-GAMMA
-BEAM_W_DEG = 33.0             # 1/e-halfhoek van de bundel in graden
+GAMMA = 0.55                  # LDR-exponent, R ~ E^-GAMMA. Gemeten 2026-11-01
+                               # (was 0,7, ongemeten aanname): gamma() op 5 punten
+                               # 15-60cm gaf 0,51 (R2=0,987); zonder het 15cm-punt
+                               # (near-field, eindige spleetbron dichtbij geen
+                               # puntbron) 0,55 (R2=0,993) -- dat laatste gebruikt.
+BEAM_W_DEG = 43.3              # 1/e-halfhoek van de bundel in graden. Gemeten
+                               # 2026-11-01 (was 33,0, ongemeten aanname):
+                               # bundel() op 9 hoeken (radius 41cm) gaf w=43,3
+                               # graden, spreiding 5,9 (13,5% van w, ruim onder
+                               # de 30%-drempel -- goede Gaussische fit).
 
 # Aannames voor de foutschatting in meet_y()
 US_FOUT_CM = 0.3              # nauwkeurigheid ultrasoon

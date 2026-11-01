@@ -172,18 +172,43 @@ CYCLES_FIXED  = 13           # vaste cycles PER STAP binnen een segment:
                              #   -> stapperiode = delay + 13 cycles
                              # NIET meegerekend: 4 cycles PER SEGMENT voor pull/out/out/mov.
                              # De effectieve overhead is dus 13 + 4/repeat. Bij de 256
+                             #
+                             # Hardware gemeten (2026-11-01, meet_frequentie(), wielen
+                             # vrij van de grond): bij 5 cm/s afwijking -0,03%, impliceert
+                             # CYCLES_FIXED=13,7; bij topsnelheid (19,1 cm/s) -0,21%,
+                             # impliceert 15,4. De "vaste" overhead is dus licht
+                             # snelheidsafhankelijk (niet helemaal CYCLES_FIXED op naam),
+                             # maar de afwijking blijft in beide gevallen <0,25% -- niet
+                             # de moeite om bij te stellen zonder logic analyzer.
                              # rampsegmenten (~22 stappen) is dat 0,18 cycle op ~1000
                              # (0,02%); bij segmenten van 1 stap 0,4%.
                              # BEREKEND, nog niet gemeten. TE VERIFIEREN met een logic
                              # analyzer op zowel lange segmenten als segmenten van
                              # 1, 2, 8 en 256 stappen (zie meet_frequentie()).
 
-WHEEL_CIRC    = 19.1         # cm — gemeten wielomtrek
+WHEEL_CIRC    = 21.33        # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
+                             # (los van de bandenwissel) gaf 30cm gecommandeerd op het meetlint
+                             # 33,5cm werkelijk, bij twee verschillende snelheden (19,1 en
+                             # 24cm/s) — dus geen snelheidsafhankelijke slip, maar een
+                             # verschoven effectieve rolomtrek door de zwenkwiel-afstelling.
+                             # 19,1 x 33,5/30 = 21,33. Was 19,1.
 TRACK_WIDTH   = 13.6         # cm — geometrische spoorbreedte hart-op-hart (documentatie)
-TRACK_WIDTH_EFF = 11.26      # cm — EFFECTIEVE spoorbreedte, gemeten 2026-10-21: rotate 360°
-                             # links gaf 434,9° op de ICM-20948-gyro (kompas ~420°). Het ASA-
-                             # frame zakt onder accu/motoren door, de banden lopen op de
-                             # binnenrand van het loopvlak. 13,6 x 360 / 434,9 = 11,26.
+TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
+                             # 21,33/19,1 = 13,62), daarna kompasmeting rotate_deg(360) (met de
+                             # gecorrigeerde WHEEL_CIRC=21,33): 352,7° (-7,3°) -> 13,90; een
+                             # derde meting over 3 omwentelingen (1080°, betere signaal/ruis)
+                             # gaf 1099,0° (+19°) -> 13,66 — binnen de kompasruis van de
+                             # 13,62/13,90-tussenstappen, dus hier geconvergeerd.
+                             # Geschiedenis (met de OUDE
+                             # WHEEL_CIRC=19,1): HERIJKT 2026-11-01 na de nieuwe TPU-banden via
+                             # het kompas (ICM-20948). Iteratief verfijnd: eerste rotate_deg(360)
+                             # met de oude 11,26 kwam maar tot 321,9° (-38,1°, visueel bevestigd
+                             # "ca 30 graden te weinig") -> 12,59; herhaling met 12,59 gaf nog
+                             # +9,95° op 360° -> 12,25; een derde meting over 3 omwentelingen
+                             # (1080°, betere signaal/ruis t.o.v. de ±5° kompasruis) gaf +34,85°
+                             # -> 12,20. Was 11,26 (gemeten 2026-10-21 met de oude banden: rotate
+                             # 360° links gaf 434,9° op de gyro, kompas ~420°; 13,6 x 360 /
+                             # 434,9 = 11,26).
 STEPS_REV     = 12800        # 1/64 microstepping (TMC2209, 200 volle stappen x 64)
 CM_PER_STEP   = WHEEL_CIRC / STEPS_REV                 # ~14,9 um/stap
 STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ~132 stappen verschil per graad
@@ -197,6 +222,13 @@ RAD_TO_DEG    = 57.29577951308232
 # nog niet aangepast -- wacht op hardwarevalidatie van max. startsnelheid/
 # versnelling (zie "Nog te verifiëren op hardware" in globale_specificatie_NL.md).
 V_MAX_CM_S    = 19.1         # 1,0 omw/s — stealthChop haalt ~300 rpm, we zitten op 60
+                             # [GEMETEN] 2026-11-01, bij ACCEL_CM_S2=55 (huidige waarde): 30cm
+                             # gecommandeerd bij 19.1/24/27/29/29,5 cm/s liep steeds soepel
+                             # (meetlint klopte, geen slip); bij 30 cm/s slipte een wiel en kwam
+                             # er 33,5cm uit (i.p.v. 30) — de praktische tractiegrens ligt dus
+                             # vlak onder 30 cm/s. V_MAX_CM_S zelf NIET verhoogd (blijft 19.1,
+                             # ruime marge onder de grens); dit was puur een meting van het
+                             # plafond, geen besluit om dichter tegen de grens aan te gaan.
 V_START_CM_S  = 1.91         # 0,1 omw/s — veilige startsnelheid, empirisch te verifieren
 ACCEL_CM_S2   = 55.0         # bepaalt de ramp-AFSTAND via (v1^2-v0^2)/(2a) = 3,28 cm.
                              # De S-curve piekt op 1,5x = 82 cm/s2 = 0,084 g.

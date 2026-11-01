@@ -185,24 +185,40 @@ class ServoController:
 
     def servo_rest(self, nr=None, graden_per_sec=20.0):
         """
-        - nr = None  -> geordend 4 -> 1 -> 2 -> 3, allemaal @ 20 °/s (laser wordt niet aangeraakt).
+        - nr = None  -> 4 eerst, dan 1+2 GELIJKTIJDIG, dan 3, allemaal @ 20 °/s.
         - nr = 1,2,4 -> alleen die servo naar rust @ opgegeven snelheid.
+
+        J1/J2 gelijktijdig: zie de botsingsrandvoorwaarden bij `tests/test_servo.py`
+        -- "J1 rust + J2 weg" botst op het controlbord, "J1 weg + J2 rust" botst
+        op de ultrasoon (2026-10-31, hardwaretest). Een van beide eerst laten
+        uitlopen is dus in BEIDE richtingen onveilig; alleen gelijktijdig is veilig.
         """
         if nr is not None:
             self._set_rest_target(nr, graden_per_sec)
             return
 
-        # Geordend: 4 -> 1 -> 2 -> 3
-        sequence = [4, 1, 2, 3]
-        for sid in sequence:
+        def _wacht(sid):
+            t0 = time.ticks_ms()
+            while not self._at_target(sid, tol_deg=1.0):
+                if time.ticks_diff(time.ticks_ms(), t0) > 5000:  # 5 s safety
+                    break
+                time.sleep_ms(10)
+
+        if 4 in self.servos:
+            self._set_rest_target(4, 20.0)
+            _wacht(4)
+
+        # 1 en 2 GELIJKTIJDIG starten, dan allebei afwachten.
+        for sid in (1, 2):
             if sid in self.servos:
                 self._set_rest_target(sid, 20.0)
-                # wacht (blokkerend) tot 'bijna' target, met timeout
-                t0 = time.ticks_ms()
-                while not self._at_target(sid, tol_deg=1.0):
-                    if time.ticks_diff(time.ticks_ms(), t0) > 5000:  # 5 s safety
-                        break
-                    time.sleep_ms(10)
+        for sid in (1, 2):
+            if sid in self.servos:
+                _wacht(sid)
+
+        if 3 in self.servos:
+            self._set_rest_target(3, 20.0)
+            _wacht(3)
 
     def set_rest_pct(self, nr, pct):
         """Stel rustpositie (in % duty) per servo in, geklemd tussen
