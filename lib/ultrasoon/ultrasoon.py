@@ -63,8 +63,18 @@ PIO_FREQ_HZ     = 2_000_000
 INTERVAL_MS     = 50
 TIMEOUT_US      = 30_000
 
-_PIO_SCALE      = PIO_FREQ_HZ // 1_000_000   # cycles per µs (= 2)
-_TIMEOUT_CYCLES = TIMEOUT_US * _PIO_SCALE     # wat de PIO als countdown krijgt (= 60_000)
+_PIO_SCALE      = PIO_FREQ_HZ // 1_000_000   # cycles per µs (= 2) -- NIET van toepassing op
+                                               # de WAIT_RISE/COUNT_HIGH-telling hieronder in
+                                               # usonic_pio(): die lus kost 2 PIO-cycli per
+                                               # aftelling (jmp(pin,...) + jmp(x_dec,...)), dus
+                                               # bij 2 MHz is 1 aftelling = 1 us, niet 0,5 us.
+                                               # [BUG, gevonden 2026-11-02] hieronder gaf de
+                                               # verkeerde toepassing van _PIO_SCALE op deze
+                                               # teller een factor-2-te-kleine afstand (10cm
+                                               # gemeten was in werkelijkheid 20cm) -- gefixt
+                                               # door _PIO_SCALE hier niet meer toe te passen.
+_TIMEOUT_CYCLES = TIMEOUT_US     # 1 aftelling = 1 us (zie toelichting hierboven), dus GEEN
+                                 # vermenigvuldiging met _PIO_SCALE (was TIMEOUT_US * _PIO_SCALE).
 
 # Ping-pong buffer
 _buf = [0, 0]
@@ -90,7 +100,7 @@ sm = rp2.StateMachine(
     jmp_pin=Pin(19, Pin.IN),
 )
 sm.put(int(PIO_FREQ_HZ * (INTERVAL_MS/1000)))
-sm.put(_TIMEOUT_CYCLES)   # PIO telt in cycles; _TIMEOUT_CYCLES = TIMEOUT_US * _PIO_SCALE
+sm.put(_TIMEOUT_CYCLES)   # PIO telt af in "us-eenheden" (zie toelichting bij _TIMEOUT_CYCLES)
 sm.irq(_irq_handler)
 sm.active(1)
 
@@ -104,7 +114,8 @@ def read_us():
     measured_cycles = _TIMEOUT_CYCLES - remainder   # 0 bij timeout (sentinel = osr)
     if measured_cycles <= 0:
         return None, 'timeout'
-    measured_us = measured_cycles // _PIO_SCALE
+    measured_us = measured_cycles   # 1 aftelling = 1 us (zie toelichting bij _TIMEOUT_CYCLES);
+                                     # NIET delen door _PIO_SCALE (was de factor-2-bug).
     if measured_us >= TIMEOUT_US:
         return TIMEOUT_US, 'overflow'
     return measured_us, 'ok'
