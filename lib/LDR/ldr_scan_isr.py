@@ -747,13 +747,19 @@ def scan(dir_char,
          graden=SCAN_DEG,
          start_graden=0.0,
          go_max=True,
-         excel=True,
+         excel=False,
          out_csv=CSV_DEFAULT):
     """Scan 370 graden met een 1kHz/10ms-ringgemiddelde.
 
     `graden` en `start_graden` blijven tijdelijk in de signatuur om oude
     aanroepen met een duidelijke foutmelding af te vangen. Een scan korter dan
     370 graden of met pre-roll kan het maximum rond 0/360 graden missen.
+
+    `excel` staat standaard UIT (2026-11-02): de CSV diende om het
+    positioneergedrag te controleren tijdens de ontwikkeling van het
+    scan-algoritme; nu dat op hardware bevestigd werkt is loggen niet meer
+    nodig. Geef `excel=True` mee als je toch weer wilt loggen (bv. bij een
+    volgende wijziging aan het algoritme).
     """
     global _raw_sum_a, _raw_sum_b, _step_s1
     global _idx, _tick_counter, _segment_done, _mode
