@@ -23,7 +23,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 4. **Grijpen** — Bestuur twee scharnier-servo's zodat de arm het voorwerp bereikt.
 5. **Sluiten grijper** — Servo 4 met stroombeperking (PI-limiter) zodat de servo niet overbelast raakt.
 6. **Terugkeren** — Omdraaien en via opgeslagen wielodometrie/trajectinformatie terug naar de startpositie; voorwerp neerzetten. De nauwkeurigheid hiervan wordt begrensd door cumulatieve odometriefout en wielslip.
-7. **IMU-ondersteuning (ICM-20948)** — gyro en magnetometer ondersteunen de oriëntatie/koers; ze leveren geen absolute X/Y-positie. Het oorspronkelijke "GY-9250"-bordje bleek bij hardwarevalidatie (2026-09-19) een kale MPU-6500 zonder magnetometer (zie *Bekende issues/TODO*) en is vervangen door een **ICM-20948** (opvolger van de MPU-9250, AK09916-magnetometer in dezelfde behuizing). Driver en scripts staan in `lib/ICM20948/` (`icm20948.py`, `ICM20948_basic.py`, `ICM20948_fusion.py`, `fusion.py`, kalibratiescripts). Gemonteerd op een 150mm mast achterin (buiten de zwaai van de servo-arm), gekalibreerd en in gebruik; het kompas is binnenshuis bruikbaar tot op ca. ±5°. De oude MPU-6500-driver (`lib/GY9250/`) is verwijderd — koerscorrectie (`stepper_ramp.py`, cascade LDR+gyro) gebruikt nu overal de ICM-20948.
+7. **IMU-ondersteuning (ICM-20948)** — gyro en magnetometer ondersteunen de oriëntatie/koers; ze leveren geen absolute X/Y-positie. Driver en scripts staan in `lib/ICM20948/` (`icm20948.py`, `ICM20948_basic.py`, `ICM20948_fusion.py`, `fusion.py`, kalibratiescripts). Gemonteerd op een 150mm mast achterin (buiten de zwaai van de servo-arm), gekalibreerd en in gebruik; het kompas is binnenshuis bruikbaar tot op ca. ±5°. Koerscorrectie (`stepper_ramp.py`, cascade LDR+gyro) gebruikt overal de ICM-20948.
 
 ---
 
@@ -39,7 +39,7 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | LDR | 2 | 47 kΩ spanningsdeler (pull-up naar 3V3) | GPIO26, GPIO27 |
 | Laser (kruishaar) | 1 | — | GPIO15 via MOSFET |intesity: PWM |
 | OLED | 1 | SSD1306 | I2C0: SDA=GPIO0, SCL=GPIO1 |Oled 126x64 pixels 0.96 inch |
-| Gyroscoop/accelerometer/magnetometer | 1 | **ICM-20948** (besteld; vervangt het MPU-6500-bordje) | I2C1: SDA=GPIO10, SCL=GPIO11. Adres 0x69 (AD0 hoog) of 0x68 (AD0 laag), driver zoekt zelf; magnetometer AK09916 op 0x0C via I2C-bypass. Driver `lib/ICM20948/icm20948.py`; controle bij levering met `tests/test_icm20948_i2c_scan.py` (verwacht WHO_AM_I `0xEA`, AK09916 `0x48`/`0x09`) |
+| Gyroscoop/accelerometer/magnetometer | 1 | **ICM-20948** | I2C1: SDA=GPIO10, SCL=GPIO11. Adres 0x69 (AD0 hoog) of 0x68 (AD0 laag), driver zoekt zelf; magnetometer AK09916 op 0x0C via I2C-bypass. Driver `lib/ICM20948/icm20948.py`; controle bij levering met `tests/test_icm20948_i2c_scan.py` (verwacht WHO_AM_I `0xEA`, AK09916 `0x48`/`0x09`) |
 | Stroomsensor grijper | — | 0,1 Ω shunt + opamp (gain 13×; nominaal 13,05×) | ADC2 = GPIO28 |
 | LED | 1 | WS2812B | GPIO6 |type:multicoler 1 wire |
 | WiFi/Bluetooth | 1 | Infineon CYW43439 (onboard Pico 2 W) | interne boardverbinding |
@@ -894,8 +894,7 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 ## Bekende issues / TODO
 
 - [x] `lib/LDR/ldr_scan_isr.py` — herzien scan-algoritme geïmplementeerd: 370°-scan (geen pre-roll), helderste A≈B-kruispunt i.p.v. som-maximum, kortste weg terug met vaste backlash-benadering, en begrensde closed-loop null-seek op A−B. Nog op hardware verifiëren.
-- [x] **Gyroscoop/kompas (GY9250) hardwarevalidatie (2026-09-19) — negatief resultaat.** I2C-scan (`tests/test_gy9250_i2c_scan.py`) laat zien dat de AK8963-magnetometer nooit op de bus verschijnt; whoami van de accel/gyro-chip is `0x70` ("standalone MPU6500"), een echte MPU-9250 geeft `0x71`. **Huidig bordje heeft dus geen magnetometer.** Gyro/accelerometer werken wél (worden al gebruikt in `stepper_ramp.py`). Besluit: vervangend bordje bestellen.
-- [x] **Vervanger: ICM-20948 besteld (2026-10-19)** in plaats van een MPU-9250 (die is end-of-life en wordt veel nagemaakt). Code omgezet: nieuwe driver `lib/ICM20948/icm20948.py` met dezelfde API als de Tuupola-driver (`acceleration`, `gyro` in rad/s, `magnetic` in µT, `temperature`, `whoami`); basic/fusion/kalibratiescripts en tests hernoemd naar `ICM20948`/`test_icm20948_*`. Kalibratiewaarden gaan nu als `mag_offset=`/`mag_scale=` naar de `ICM20948`-constructor. De magnetometerassen worden in de driver uitgelijnd op die van accel/gyro (X gelijk, Y en Z omgekeerd volgens datasheet), wat de kantelcompensatie in `fusion.py` nodig heeft.
+- [x] **ICM-20948 driver geïmplementeerd.** Nieuwe driver `lib/ICM20948/icm20948.py` met dezelfde API als de Tuupola-driver (`acceleration`, `gyro` in rad/s, `magnetic` in µT, `temperature`, `whoami`); basic/fusion/kalibratiescripts en tests heten `ICM20948`/`test_icm20948_*`. Kalibratiewaarden gaan als `mag_offset=`/`mag_scale=` naar de `ICM20948`-constructor. De magnetometerassen worden in de driver uitgelijnd op die van accel/gyro (X gelijk, Y en Z omgekeerd volgens datasheet), wat de kantelcompensatie in `fusion.py` nodig heeft.
 - [ ] Na levering ICM-20948: `tests/test_icm20948_i2c_scan.py` draaien (WHO_AM_I `0xEA`, `0x0c` na bypass, AK09916 `0x48`/`0x09`). Daarna: asuitlijning van de magnetometer controleren (kop naar het noorden en 90° draaien → koers verandert ~90° in dezelfde richting als de geïntegreerde gyro-Z), `GYRO_Z_SIGN` opnieuw verifiëren (andere chip/montage), bias, magnetometerkalibratie en hardwaregedrag met draaiende stappenmotoren.
 - [ ] OLED (SSD1306) — integratie nog niet geïmplementeerd; voorstel staat in `te doen.md`.
 - [x] GPIO-tabel gecontroleerd en geverifieerd tegen KiCad netlist V1.2 (zie [hardware/gpio_pinout.md](hardware/gpio_pinout.md))
@@ -952,4 +951,4 @@ Webserver op basis van **microdot** (asyncio) met een websocket, zodat het karre
 
 ## Afhankelijkheden
 
-MicroPython voor **Raspberry Pi Pico 2 W (RP2350 + CYW43439)**. **Exacte firmwareversie/build nog vastleggen** voor reproduceerbaarheid. Externe libraries: `mpu9250`, `mpu6500`, `ak8963` (Tuupola, via awesome-micropython; alleen nog voor het oude MPU-6500-bordje), `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).
+MicroPython voor **Raspberry Pi Pico 2 W (RP2350 + CYW43439)**. **Exacte firmwareversie/build nog vastleggen** voor reproduceerbaarheid. Externe libraries: `ssd1306` (SSD1306 OLED driver), `microdot` (asyncio-webserver met websocket-ondersteuning).
