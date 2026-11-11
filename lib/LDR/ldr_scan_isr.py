@@ -20,7 +20,13 @@ import time
 #  CONFIG / CONSTANTEN
 # =========================
 
-LDR_SM_ID            = 8              # PIO2 SM0 — los van stepper (PIO0) en ultrasoon (PIO1)
+LDR_SM_ID            = 9              # PIO2 SM1 — los van stepper (PIO0) en ultrasoon (PIO1).
+                                       # SM8 (PIO2 SM0) NIET gebruiken: die wordt door de CYW43-
+                                       # WiFi-chip zelf geclaimd zodra WiFi actief is (AP- of
+                                       # stationmodus) -- StateMachine(8, ...) geeft dan
+                                       # "StateMachine claimed by external resource". Gevonden
+                                       # 2026-11-11 bij de eerste scan() met de webserver-AP
+                                       # actief (tests/test_webserver_rc.py); SM9-11 zijn wel vrij.
 LDR_PIO_FREQ_HZ      = 100_000
 
 LDR_PIN_A            = 26
@@ -39,17 +45,22 @@ LDR_TIMER_PIN        = 9              # sideset-uitgang van PIO-klok (NC op PCB,
 # WHEEL_BASE_CM schaalt daarmee proportioneel mee (zie TRACK_WIDTH_EFF in
 # lib/stepper/stepper_ramp.py voor de volledige toelichting en meting).
 # Een eventuele restcorrectie die alleen voor de scan geldt, hoort in ROT_SCALE.
+# WHEEL_BASE_CM leest dezelfde config.json-sleutel als TRACK_WIDTH_EFF in
+# lib/stepper/stepper_ramp.py ("stepper"."track_width_eff_cm"), zodat deze twee
+# nooit meer los van elkaar gewijzigd kunnen worden (voorheen twee losse
+# constanten die handmatig gelijk gehouden moesten worden).
+# ROT_SCALE/ROT_SCALE_L/ROT_SCALE_R: fallbacks hieronder, waarden in config.json
+# sectie "ldr". HERMETEN 2026-11-01 na de nieuwe TPU-banden (kompasmeting
+# rotate_deg(+-360)): rechtsom 357,1°, linksom 357,6° -> beide ~1,007-1,008,
+# binnen de kompasruis (±5°) van elkaar en van 1,0. De links/rechts-asymmetrie
+# van de oude banden (2,7%) is met het nieuwe profielloze/gekroonde loopvlak
+# kennelijk verdwenen -> geen richtingsafhankelijke correctie meer nodig. Oude
+# meting (2026-10-21, OUDE banden) met stepper.rotate() 360° bij 5 cm/s:
+# rechtsom gyro 360,0°, linksom 370,1° en 369,8° (laserstip 8 cm verder op
+# 50 cm = 9,1°) -> toen ~2,7% verschil, waarschijnlijk door zwenkwiel/
+# gewichtsverdeling.
 WHEEL_BASE_CM        = 13.66
 ROT_SCALE            = 1.0
-# Correctie per draairichting, bovenop ROT_SCALE. HERMETEN 2026-11-01 na de
-# nieuwe TPU-banden (kompasmeting rotate_deg(+-360)): rechtsom 357,1°, linksom
-# 357,6° -> beide ~1,007-1,008, binnen de kompasruis (±5°) van elkaar en van
-# 1,0. De links/rechts-asymmetrie van de oude banden (hieronder, 2,7%) is met
-# het nieuwe profielloze/gekroonde loopvlak kennelijk verdwenen -> geen
-# richtingsafhankelijke correctie meer nodig. Oude meting (2026-10-21, OUDE
-# banden) met stepper.rotate() 360° bij 5 cm/s: rechtsom gyro 360,0°, linksom
-# 370,1° en 369,8° (laserstip 8 cm verder op 50 cm = 9,1°) -> toen ~2,7%
-# verschil, waarschijnlijk door zwenkwiel/gewichtsverdeling.
 ROT_SCALE_L          = 1.0
 ROT_SCALE_R          = 1.0
 
@@ -85,6 +96,20 @@ CONFIG_PATH          = "config.json"
 LDR_B_GAMMA          = 1.0772
 LDR_B_LN_C           = -0.6005
 
+# LDR-exponent (R ~ E^-GAMMA) en bundel-halfhoek, gemeten met tests/test_ldr_beam.py
+# (gamma()/bundel()). GEEN verband met LDR_B_GAMMA hierboven: dat is de
+# A-vs-B-kalibratie tussen de twee cellen, dit is de resistance-naar-licht-wet
+# van één cel. Gebruikt door tests/test_drive.py (relatieve verlichtingssterkte
+# op het display) en tests/test_ldr_beam.py zelf (bootstrapping tijdens de
+# meting). Bron: config.json, sectie "ldr"; deze waarden zijn de fallback.
+GAMMA                = 0.55    # Gemeten 2026-11-01: gamma() op 5 punten 15-60cm gaf 0,51
+                               # (R2=0,987); zonder het 15cm-punt (near-field, eindige
+                               # spleetbron dichtbij geen puntbron) 0,55 (R2=0,993) -- dat
+                               # laatste gebruikt. Was 0,7 (ongemeten aanname).
+BEAM_W_DEG           = 43.3    # 1/e-halfhoek van de bundel in graden. Gemeten 2026-11-01:
+                               # bundel() op 9 hoeken (radius 41cm) gaf w=43,3 graden,
+                               # spreiding 5,9 (13,5% van w). Was 33,0 (ongemeten aanname).
+
 
 def _load_ldr_config():
     """Lees de "ldr"-sectie uit config.json; {} als die ontbreekt of corrupt is."""
@@ -96,11 +121,28 @@ def _load_ldr_config():
         return {}
 
 
+def _load_stepper_track_width_eff():
+    """Lees "stepper"."track_width_eff_cm" uit config.json (zelfde bron als
+    lib/stepper/stepper_ramp.py's TRACK_WIDTH_EFF); {} als die ontbreekt."""
+    try:
+        import json
+        with open(CONFIG_PATH) as f:
+            return json.load(f).get("stepper", {})
+    except Exception:
+        return {}
+
+
 _cfg = _load_ldr_config()
 LDR_R_FIXED_OHM = float(_cfg.get("r_fixed_ohm", LDR_R_FIXED_OHM))
 LDR_B_GAMMA     = float(_cfg.get("b_gamma", LDR_B_GAMMA))
 LDR_B_LN_C      = float(_cfg.get("b_ln_c", LDR_B_LN_C))
+GAMMA           = float(_cfg.get("gamma", GAMMA))
+BEAM_W_DEG      = float(_cfg.get("beam_w_deg", BEAM_W_DEG))
+ROT_SCALE       = float(_cfg.get("rot_scale", ROT_SCALE))
+ROT_SCALE_L     = float(_cfg.get("rot_scale_l", ROT_SCALE_L))
+ROT_SCALE_R     = float(_cfg.get("rot_scale_r", ROT_SCALE_R))
 del _cfg
+WHEEL_BASE_CM   = float(_load_stepper_track_width_eff().get("track_width_eff_cm", WHEEL_BASE_CM))
 _INV_B_GAMMA    = 1.0 / LDR_B_GAMMA
 _LN_R_MIN       = math.log(LDR_R_MIN_OHM)
 _LN_R_MAX       = math.log(LDR_R_MAX_OHM)
@@ -807,15 +849,21 @@ def scan(dir_char,
     _tick_counter = target_samples
     _segment_done = False
 
-    # SM8 samplet vast op 1 kHz; scanpunten worden met een fase-accumulator
+    # SM9 samplet vast op 1 kHz; scanpunten worden met een fase-accumulator
     # gedecimeerd naar TARGET_SAMPLES_PER_DEG zonder afrondingsdrift.
+    # _mode wordt hieronder in EEN try/finally gezet die ook _start_pio() en
+    # stepper.rotate() omvat: gaat een van die twee stuk (bv. SM-conflict),
+    # dan zou _mode anders voorgoed op "scan" blijven staan en raakt elke
+    # volgende scan()-aanroep geblokkeerd met "LDR scan busy" totdat de Pico
+    # herstart -- gevonden 2026-11-11 toen WiFi-AP (tests/test_webserver_rc.py)
+    # SM8 claimde en _start_pio() daardoor crashte.
     _mode = "scan"
-    _start_pio(LDR_SAMPLE_MS)
-    stepper.rotate(dir_char, speed_cm_s, dist_cm)
-
-    scan_timeout_ms = int((T_s * 2.0 + 5.0) * 1000)
-    t0 = time.ticks_ms()
     try:
+        _start_pio(LDR_SAMPLE_MS)
+        stepper.rotate(dir_char, speed_cm_s, dist_cm)
+
+        scan_timeout_ms = int((T_s * 2.0 + 5.0) * 1000)
+        t0 = time.ticks_ms()
         while not _segment_done:
             if time.ticks_diff(time.ticks_ms(), t0) > scan_timeout_ms:
                 stepper.stop()

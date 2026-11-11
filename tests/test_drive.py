@@ -65,10 +65,11 @@ ARM_STREK_GRAD = 180.0             # volledig gestrekt voor stap 5
 STOP_CM = geo.STOP_DIST_CM
 
 # LDR-weergave als relatieve VERLICHTINGSSTERKTE (niet spanning, niet de
-# interne log-weerstandschaal): R ~ E^-GAMMA (gemeten 2026-11-01, zie
-# tests/test_ldr_beam.py), dus E ~ R^(-1/GAMMA). Hergebruikt
-# ldr._adc_to_res_ohm() voor de ADC->weerstand-stap; alleen de machtswet en de
-# normalisatie naar 0..100% (tussen LDR_R_MIN_OHM en LDR_R_MAX_OHM) komen erbij.
+# interne log-weerstandschaal): R ~ E^-GAMMA (ldr.GAMMA, config.json sectie
+# "ldr", gemeten 2026-11-01 met tests/test_ldr_beam.py), dus E ~ R^(-1/GAMMA).
+# Hergebruikt ldr._adc_to_res_ohm() voor de ADC->weerstand-stap; alleen de
+# machtswet en de normalisatie naar 0..100% (tussen LDR_R_MIN_OHM en
+# LDR_R_MAX_OHM) komen erbij.
 # Geeft, anders dan een letterlijke spanningslineaire %, een schaal die recht
 # evenredig is met het licht zelf -- voor buitenstaanders nog steeds een
 # simpel percentage, maar natuurkundig het juiste begrip ("verlichtingssterkte",
@@ -76,16 +77,15 @@ STOP_CM = geo.STOP_DIST_CM
 # meting is alleen de 0..100%-schaal bekend, niet de absolute eenheid.
 LDR_PIN_A = 26
 LDR_PIN_B = 27
-GAMMA = 0.55   # LDR-exponent, gemeten 2026-11-01 (tests/test_ldr_beam.py)
 _adc_ldr_a = ADC(LDR_PIN_A)
 _adc_ldr_b = ADC(LDR_PIN_B)
-_E_REL_MIN = ldr.LDR_R_MAX_OHM ** (-1.0 / GAMMA)   # bij donker (R max) -> laagste E
-_E_REL_MAX = ldr.LDR_R_MIN_OHM ** (-1.0 / GAMMA)   # bij fel licht (R min) -> hoogste E
+_E_REL_MIN = ldr.LDR_R_MAX_OHM ** (-1.0 / ldr.GAMMA)   # bij donker (R max) -> laagste E
+_E_REL_MAX = ldr.LDR_R_MIN_OHM ** (-1.0 / ldr.GAMMA)   # bij fel licht (R min) -> hoogste E
 
 
 def _ldr_licht_pct(raw_u16):
     r_ohm = ldr._adc_to_res_ohm(raw_u16)
-    e_rel = r_ohm ** (-1.0 / GAMMA)
+    e_rel = r_ohm ** (-1.0 / ldr.GAMMA)
     pct = 100.0 * (e_rel - _E_REL_MIN) / (_E_REL_MAX - _E_REL_MIN)
     if pct < 0.0:
         pct = 0.0
@@ -95,6 +95,17 @@ def _ldr_licht_pct(raw_u16):
 
 ROTATIE_GRADEN = 180.0
 ROTATIE_SNELHEID_CM_S = sr.V_MAX_CM_S / 2.0
+
+# De kar draait om de wielas, niet om de ultrasoon aan de voorkant. Het
+# zwenkwiel zit 150mm ACHTER de wielas (zie globale_specificatie_NL.md ->
+# Afmetingen), de ultrasoon zit maar ~80mm VOOR de as (230mm totale lengte -
+# 150mm). Bij een 180-graden-draai op de plek beschrijft de achterkant van de
+# kar dus een veel grotere boog dan de voorkant bij het stoppen gebruikt --
+# met de breedte van de kar erbij (de hoeken steken nog verder uit) is de
+# marge bij STOP_DIST_CM te klein en stoot de achterkant de lichtbron om.
+# Ruim geschatte, nog niet op hardware geverifieerde marge -- controleer en
+# stel bij als de achterkant nog te dicht langs het voorwerp zwaait.
+TERUG_VOOR_DRAAIEN_CM = 15.0
 
 TOLERANTIE_GRAD = 1.0
 SERVO_TIMEOUT_MS = 12000
@@ -239,7 +250,8 @@ def main():
             update_display(sc)
             time.sleep_ms(sr.SLICE_MS // 2)
         update_display(sc)
-        print("cruise klaar: afstand=%.2f heading=%.2f" % (sr.distance(), sr.heading()))
+        afstand_gereden = sr.distance()   # werkelijke afstand, ook als de ultrasoon-stop eerder afbrak
+        print("cruise klaar: afstand=%.2f heading=%.2f" % (afstand_gereden, sr.heading()))
 
         # --- 3) "Pak" het artikel, dan arm terugtrekken ---
         _zet_stap("3 pak")
@@ -254,11 +266,22 @@ def main():
         print("--- arm %.0f graden terugtrekken ---" % ARM_TERUGTREK_GRAD)
         arm_naar(sc, ARM_REIK_GRAD - ARM_TERUGTREK_GRAD)
 
-        # --- 4) 180 graden draaien en terugrijden naar start ---
+        # --- 4) Eerst achteruit (zie TERUG_VOOR_DRAAIEN_CM hierboven), dan
+        #        180 graden draaien en terugrijden naar start ---
         _zet_stap("4 terug")
+        _zet_mode("MB", CRUISE_SNELHEID_CM_S)
+        update_display(sc)
+        print("--- Stap 4a: %.0f cm achteruit (ruimte voor de draai) ---" % TERUG_VOOR_DRAAIEN_CM)
+        sr.reset_PIO_distance()
+        mv = sr.drive(TERUG_VOOR_DRAAIEN_CM, CRUISE_SNELHEID_CM_S, forward=False)
+        while mv.service():
+            update_display(sc)
+            time.sleep_ms(sr.SLICE_MS // 2)
+        update_display(sc)
+
         _zet_mode("MR", ROTATIE_SNELHEID_CM_S)
         update_display(sc)
-        print("--- Stap 4: %.0f graden draaien ---" % ROTATIE_GRADEN)
+        print("--- Stap 4b: %.0f graden draaien ---" % ROTATIE_GRADEN)
         sr.reset_PIO_distance()
         sr.rotate_deg(ROTATIE_GRADEN, ROTATIE_SNELHEID_CM_S)
         while sr.busy():
@@ -267,10 +290,15 @@ def main():
         update_display(sc)
         print("draai klaar: heading=%.2f" % sr.heading())
 
+        # Terug naar het ECHTE startpunt: de heenweg (afstand_gereden, kan
+        # korter zijn dan CRUISE_AFSTAND_CM als de ultrasoon-stop eerder
+        # afbrak) minus de TERUG_VOOR_DRAAIEN_CM die net al achteruit is
+        # gereden -- anders schiet de kar er 15cm voorbij.
+        terugrit_cm = max(0.0, afstand_gereden - TERUG_VOOR_DRAAIEN_CM)
         _zet_mode("MF", CRUISE_SNELHEID_CM_S)
-        print("--- terugrijden %.0f cm naar het startpunt ---" % CRUISE_AFSTAND_CM)
+        print("--- terugrijden %.0f cm naar het startpunt ---" % terugrit_cm)
         sr.reset_PIO_distance()
-        mv = sr.drive(CRUISE_AFSTAND_CM, CRUISE_SNELHEID_CM_S)   # GEEN LDR-bijsturing:
+        mv = sr.drive(terugrit_cm, CRUISE_SNELHEID_CM_S)   # GEEN LDR-bijsturing:
         # de kar kijkt nu van de lichtbron AF, dus A-B zou hier het verkeerde
         # stuursignaal geven.
         while mv.service():

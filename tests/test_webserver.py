@@ -9,8 +9,11 @@
 # Nog NIET aanwezig (bewust): koppeling met stepper/servo/LDR, core 1, deadman.
 # Die komen pas nadat dit fundament stabiel blijkt.
 #
-# Vooraf eenmalig microdot installeren op de Pico 2 W (via mip, WiFi nodig, of mpremote):
-#   import mip; mip.install('microdot'); mip.install('microdot.websocket')
+# microdot + de websocket-extensie staan als platte modules in lib/microdot/
+# (microdot.py, microdot_websocket.py) en worden door upload_to_pico.sh naar
+# een platte /lib op de Pico gekopieerd -- zie lib/microdot/microdot_websocket.py
+# voor waarom dit GEEN pakket-import is ("microdot.websocket" zoals upstream
+# gebruikt werkt hier niet, dit project plat alle lib-modules af).
 #
 # Draaien:  import test_webserver  (of via mpremote run)
 # Verbinden: WiFi-netwerk "DIYCAR" -> browser naar http://192.168.4.1
@@ -20,7 +23,7 @@ import json
 import asyncio
 
 from microdot import Microdot
-from microdot.websocket import with_websocket
+from microdot_websocket import with_websocket
 
 # -----------------------------------------
 # WiFi — Access Point (kar als eigen netwerk, geen router nodig)

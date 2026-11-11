@@ -6,6 +6,23 @@ from array import array
 import rp2
 from rp2 import PIO, StateMachine, asm_pio
 
+CONFIG_PATH = "config.json"
+
+
+def _load_stepper_config():
+    """Lees de "stepper"-sectie uit config.json; {} als die ontbreekt of corrupt is.
+    Zelfde sectie als lib/stepper/stepper_ramp.py, zodat WHEEL_CIRC/TRACK_WIDTH_EFF
+    niet los van elkaar kunnen gaan afwijken."""
+    try:
+        import json
+        with open(CONFIG_PATH) as f:
+            return json.load(f).get("stepper", {})
+    except Exception:
+        return {}
+
+
+_cfg = _load_stepper_config()
+
 # PIO-instructies voor sm.exec(), één keer vooraf gecodeerd. exec() met een
 # tekst laat de assembler bij ELKE aanroep opnieuw draaien: gemeten ~12 ms en
 # ~230 bytes per positie-uitlezing (2026-10-21), tegen ~25 us en 0 bytes zo.
@@ -49,15 +66,18 @@ def stepper_counter():
 # -----------------------------------------
 F_PIO = 15_000_000         # 150 MHz sysclk / 10 → integer klokdeler (geen fractionele jitter).
                            # STEP-puls blijft 11 cycles = 733 ns ≥ 100 ns (TMC2209-minimum).
-WHEEL_CIRC   = 21.33       # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
+WHEEL_CIRC   = float(_cfg.get("wheel_circ_cm", 21.33))
+                           # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
                              # (los van de bandenwissel) gaf 30cm gecommandeerd op het meetlint
                              # 33,5cm werkelijk, bij twee verschillende snelheden (19,1 en
                              # 24cm/s) — dus geen snelheidsafhankelijke slip, maar een
                              # verschoven effectieve rolomtrek door de zwenkwiel-afstelling.
                              # 19,1 x 33,5/30 = 21,33. Was 19,1 (was 20,94; die gaf 8,8% te
                              # korte afstanden).
-TRACK_WIDTH  = 13.6        # cm — geometrische spoorbreedte hart-op-hart (alleen documentatie)
-TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
+TRACK_WIDTH  = float(_cfg.get("track_width_cm", 13.6))
+                           # cm — geometrische spoorbreedte hart-op-hart (alleen documentatie)
+TRACK_WIDTH_EFF = float(_cfg.get("track_width_eff_cm", 13.66))
+                             # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
                              # 21,33/19,1 = 13,62), daarna kompasmeting rotate_deg(360) (met de
                              # gecorrigeerde WHEEL_CIRC=21,33): 352,7° (-7,3°) -> 13,90; een
                              # derde meting over 3 omwentelingen (1080°, betere signaal/ruis)
@@ -73,6 +93,7 @@ TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CI
                              # -> 12,20. Was 11,26 (gemeten 2026-10-21 met de oude banden: rotate
                              # 360° links gaf 434,9° op de gyro, kompas ~420°; 13,6 x 360 /
                              # 434,9 = 11,26).
+del _cfg
 STEPS_REV    = 12800       # 1/64 microstepping (TMC2209: 200 volle stappen × 64; MS1→GND, MS2→+5V)
 CM_PER_STEP  = WHEEL_CIRC / STEPS_REV   # ≈ 14,9 µm/stap
 STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ≈ 132 stappen verschil per graad koers

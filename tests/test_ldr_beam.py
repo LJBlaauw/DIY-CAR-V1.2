@@ -60,7 +60,10 @@ N_SAMPLES = 10                 # gemiddeld over SAMPLE_INTERVAL_MS uit elkaar
 SAMPLE_INTERVAL_MS = 1         # 10 x 1 ms = 10 ms = één 100Hz-netperiode
 CSV_DIR = "/"
 
-# Startwaarden; worden overschreven door gamma() en bundel()
+# Startwaarden (fallback als lib/LDR/ldr_scan_isr.py niet importeerbaar is,
+# zie hieronder); de WERKELIJKE bron is config.json, sectie "ldr" (sleutels
+# "gamma"/"beam_w_deg"), zelfde als tests/test_drive.py gebruikt. gamma() en
+# bundel() printen na een nieuwe meting waar je die sectie moet bijwerken.
 GAMMA = 0.55                  # LDR-exponent, R ~ E^-GAMMA. Gemeten 2026-11-01
                                # (was 0,7, ongemeten aanname): gamma() op 5 punten
                                # 15-60cm gaf 0,51 (R2=0,987); zonder het 15cm-punt
@@ -83,9 +86,11 @@ _R_FIXED = R_FIXED_VERWACHT
 try:
     import ldr_scan_isr
     _R_FIXED = float(ldr_scan_isr.LDR_R_FIXED_OHM)
+    GAMMA = float(ldr_scan_isr.GAMMA)
+    BEAM_W_DEG = float(ldr_scan_isr.BEAM_W_DEG)
 except Exception:
-    print("! ldr_scan_isr niet importeerbaar; val terug op R_FIXED =",
-          R_FIXED_VERWACHT)
+    print("! ldr_scan_isr niet importeerbaar; val terug op R_FIXED/GAMMA/BEAM_W_DEG =",
+          R_FIXED_VERWACHT, GAMMA, BEAM_W_DEG)
 
 
 def controleer_config():
@@ -213,7 +218,7 @@ def gamma(afstanden=(15, 20, 30, 40, 60), csv=None):
                                "(LET OP: kwadratenwet gaat niet op)"))
     if not (0.3 < g < 1.2):
         print("  ! gamma buiten het gebruikelijke bereik 0,4-1,0 voor CdS.")
-    print("\n  Zet in dit script:  GAMMA = %.3f" % g)
+    print("\n  Zet in config.json, sectie \"ldr\":  \"gamma\": %.3f" % g)
     if csv:
         _csv(csv, "d_cm,R_A,R_B,R_gem,adc_A,adc_B", rijen)
     return g
@@ -265,7 +270,7 @@ def bundel(radius_cm=40, hoeken=(0, 5, 10, 15, 20, 25, 30, 40, 50), csv=None):
         if spreiding > 0.3 * w_gem:
             print("  ! grote spreiding -> het profiel is niet gaussisch;")
             print("    gebruik dan de tabel i.p.v. de fit.")
-        print("\n  Zet in dit script:  BEAM_W_DEG = %.1f" % w_gem)
+        print("\n  Zet in config.json, sectie \"ldr\":  \"beam_w_deg\": %.1f" % w_gem)
     else:
         print("\n  ! geen bruikbare punten; staat de bron wel aan?")
         w_gem = None
@@ -474,7 +479,7 @@ Aanbevolen volgorde:
   1. controleer_config()          hardware en code kloppen bij elkaar
   2. gamma()                      bankmeting, LDR-exponent
   3. bundel()                     bankmeting, 1/e-halfhoek van de bundel
-     -> zet GAMMA en BEAM_W_DEG bovenaan dit bestand
+     -> zet "gamma"/"beam_w_deg" in config.json, sectie "ldr"
   4. nauwkeurigheid()             wat is er haalbaar (geen hardware)
   5. meet_y()                     op de kar, na nullen op A-B
   6. dither_teken()               aan welke kant ligt de bundelas

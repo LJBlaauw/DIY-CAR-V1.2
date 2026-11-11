@@ -24,7 +24,25 @@
     "r_fixed_ohm": 47000,
     "b_gamma": 1.0772,
     "b_ln_c": -0.6005,
-    "note": "Pull-up R29/R30 = 47 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19, c herberekend voor 47 kOhm op 2026-10-20."
+    "gamma": 0.55,
+    "beam_w_deg": 43.3,
+    "rot_scale": 1.0,
+    "rot_scale_l": 1.0,
+    "rot_scale_r": 1.0,
+    "note": "Pull-up R29/R30 = 47 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19, c herberekend voor 47 kOhm op 2026-10-20. gamma/beam_w_deg: R ~ E^-gamma (resistance-naar-licht-wet van 1 cel, los van b_gamma/b_ln_c die de A/B-cellen onderling vergelijken) en de 1/e-halfhoek van de lichtbundel, gemeten 2026-11-01 met tests/test_ldr_beam.py (gamma(): 0,55, R^2=0,993; bundel(): 43,3 graden, spreiding 13,5%). rot_scale/rot_scale_l/rot_scale_r: restcorrectie op de scanrotatie bovenop WHEEL_BASE_CM (zie sectie \"stepper\", track_width_eff_cm); hermeten 2026-11-01 na de nieuwe TPU-banden, rechtsom/linksom binnen de kompasruis van 1,0 -> geen richtingsafhankelijke correctie meer nodig."
+  },
+  "stepper": {
+    "wheel_circ_cm": 21.33,
+    "track_width_cm": 13.6,
+    "track_width_eff_cm": 13.66,
+    "cycles_fixed": 13,
+    "v_max_cm_s": 19.1,
+    "v_start_cm_s": 1.91,
+    "accel_cm_s2": 55.0,
+    "motor_turn_sign": 1,
+    "gyro_z_sign": -1,
+    "ldr_diff_sign": 1,
+    "note": "Gelezen door lib/stepper/stepper_ramp.py EN lib/stepper/stepper.py (legacy, nog gebruikt door tests/test_stepper.py en de ICM-20948-autokalibratie); track_width_eff_cm is ook de ENIGE bron voor WHEEL_BASE_CM in lib/LDR/ldr_scan_isr.py, zodat die twee nooit meer los van elkaar gewijzigd kunnen worden. wheel_circ_cm: HERIJKT 2026-11-01 na het afstellen van het zwenkwiel (los van de bandenwissel), 30cm gecommandeerd gaf 33,5cm werkelijk op twee snelheden -> 21,33 (was 19,1). track_width_cm: geometrische spoorbreedte hart-op-hart, puur documentatie, niet in de berekeningen gebruikt. track_width_eff_cm: analytisch meegeschaald (13,62) en met kompasmeting over 3 omwentelingen geconvergeerd naar 13,66. cycles_fixed: vaste PIO-cycles per stap (nominaal 13), BEREKEND maar nog niet met een logic analyzer gemeten -- hardwaremeting 2026-11-01 (meet_frequentie()) impliceert een licht snelheidsafhankelijke 13,7-15,4, afwijking blijft <0,25%. v_max_cm_s/v_start_cm_s/accel_cm_s2: snelheidsgrenzen, V_MAX gemeten 2026-11-01 (tractiegrens vlak onder 30 cm/s, V_MAX zelf bewust op 19,1 gehouden). motor_turn_sign/gyro_z_sign/ldr_diff_sign: hardware-tekenconventies (motor-bekabeling, ICM-20948-montage, LDR-verschil), zie de uitleg in stepper_ramp.py."
   },
   "icm20948": {
     "mag_offset": [
@@ -43,5 +61,14 @@
       1
     ],
     "note": "Hard-iron offset (uT) en soft-iron scale van de AK09916, begeleide kalibratie 2026-10-26 (tests/test_icm20948_calibrate.py, 4 stappen Z/X/Y/achtje, op de vloer, motordrivers UIT): bereik per as 96-100 uT, |B| 48,2 uT, spreiding 2,9 % (1 sigma, 1911 metingen). Sensor op 150 mm paaltje achterin (140 mm achter de wielas, 40 mm uit het midden), 180 graden om Z gedraaid t.o.v. eerder: sensor-X wijst naar ACHTEREN, Y naar RECHTS, Z omhoog. Deze offsets staan in het SENSOR-assenstelsel en worden toegepast VOOR \"mount\" ([-1,-1,1]: sensor -> kar, X naar voren, Y naar links, Z omhoog); bij een andere montage alleen \"mount\" aanpassen, niet opnieuw kalibreren. Stroomstoring op deze plek (wielen vrij): houdstroom 0,28 uT, draaiend 0,24 uT -> verwaarloosbaar. Correctie 2026-10-26 op de vloer (tests/test_kompas_richtingen.py, 4 richtingen op een kompasroos): rest-offset van -7,65 uT langs kar-Y (Bh 13-29 uT afhankelijk van de richting, koersfout tot 21 graden) -> sensor-Y-offset -2,55 -> 5,12, X -41,55 -> -41,49. Daarna volgens dezelfde meting: Bh 20,7-21,4 uT, afwijking +1,4..+4,6 graden. Vloerkalibratie 2026-10-26 (tests/test_kompas_vloerkalibratie.py, kar draait zelf 380 graden op een rubberen mat, cirkelfit): rest-offset nog dX -1,22 / dY -0,31 uT (bevestigt de Y-correctie), Bh 21,6 uT, 0,74 uT RMS (~2 graden) -> mag_offset X -41,49 -> -40,29, Y 5,12 -> 5,43. Herhaald op de kale vloer met remmen op de gyro (371 graden werkelijk gedraaid; op de mat was de draai door de kleinere effectieve spoorbreedte minder dan 360): rest-offset dX -0,23 / dY +1,16 uT, Bh 21,05 uT, 0,75 uT RMS -> mag_offset [-40,06, 4,27, -2,25]. Run-tot-run verschil ~1 uT = ~3 graden: de nauwkeurigheidsgrens binnenshuis. Controle met tests/test_kompas_richtingen.py (Z/W/N/O op een papieren kompasroos): afwijking +4,4 / +7,4 / -0,2 / -2,4 graden (gem. +2,3 = ~declinatie), Bh 19,5-22,1 uT; op die plek nog ~1,8 uT rest-offset -> binnenshuis ca. +/-5 graden absoluut."
+  },
+  "vl53l1x": {
+    "range_scale_correction": 1.04779,
+    "note": "Gemeten 2026-11-08 (tests/test_TOF.py): dit exemplaar meet structureel te kort, een vrijwel pure schaalfout van ~4,8% (geen vaste offset) -- 9 meetlint-punten tussen 10 en 250cm gaven gemeten = 0,9544 * werkelijk - 0,2mm (R^2 = 0,9998). range_scale_correction = 1/0,9544, toegepast in vl53l1x.py na de bestaande ST-gain-correctie (2011/2048). Deze waarde is specifiek voor DIT exemplaar/bordje -- bij vervanging van de sensor de 9-punts meetlintcalibratie herhalen, niet zomaar overnemen."
+  },
+  "network": {
+    "ap_ssid": "DIYCAR",
+    "ap_password": "diycar12345",
+    "note": "AP-modus (kar als eigen accesspoint) heeft de voorkeur voor mobiel gebruik, zie globale_specificatie_NL.md -> webserver-sectie. WPA2 vereist >= 8 tekens. Gebruikt door tests/test_webserver.py en tests/test_webserver_rc.py."
   }
 }

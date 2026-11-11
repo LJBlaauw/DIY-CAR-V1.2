@@ -112,9 +112,27 @@
 
 from array import array
 from math import sqrt
+import time
 import rp2
 from machine import Pin
 from rp2 import PIO, StateMachine, asm_pio
+
+CONFIG_PATH = "config.json"
+
+
+def _load_stepper_config():
+    """Lees de "stepper"-sectie uit config.json; {} als die ontbreekt of corrupt is.
+    Mag nooit een crash bij het opstarten veroorzaken (zelfde patroon als
+    lib/servo/servo_crl.py, lib/LDR/ldr_scan_isr.py en lib/VL53L1X/vl53l1x.py)."""
+    try:
+        import json
+        with open(CONFIG_PATH) as f:
+            return json.load(f).get("stepper", {})
+    except Exception:
+        return {}
+
+
+_cfg = _load_stepper_config()
 
 # PIO-instructies voor sm.exec(), één keer vooraf gecodeerd. exec() met een
 # tekst laat de assembler bij ELKE aanroep opnieuw draaien: gemeten ~12 ms en
@@ -163,7 +181,8 @@ def step_counter():
 # Constanten
 # ----------------------------------------------------------------
 F_PIO         = 15_000_000   # 150 MHz sysclk / 10 -> integer klokdeler, geen fractionele jitter
-CYCLES_FIXED  = 13           # vaste cycles PER STAP binnen een segment:
+CYCLES_FIXED  = int(_cfg.get("cycles_fixed", 13))
+                             # vaste cycles PER STAP binnen een segment:
                              #   mov(x, isr)[7] + nop()[2] = 11 (STEP hoog)
                              #   jmp(x_dec, "wait")  = delay + 1  (bij x == 0 wordt de
                              #                         instructie nog één keer uitgevoerd
@@ -186,14 +205,17 @@ CYCLES_FIXED  = 13           # vaste cycles PER STAP binnen een segment:
                              # analyzer op zowel lange segmenten als segmenten van
                              # 1, 2, 8 en 256 stappen (zie meet_frequentie()).
 
-WHEEL_CIRC    = 21.33        # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
+WHEEL_CIRC    = float(_cfg.get("wheel_circ_cm", 21.33))
+                             # cm — HERIJKT 2026-11-01: na het goed afstellen van het zwenkwiel
                              # (los van de bandenwissel) gaf 30cm gecommandeerd op het meetlint
                              # 33,5cm werkelijk, bij twee verschillende snelheden (19,1 en
                              # 24cm/s) — dus geen snelheidsafhankelijke slip, maar een
                              # verschoven effectieve rolomtrek door de zwenkwiel-afstelling.
                              # 19,1 x 33,5/30 = 21,33. Was 19,1.
-TRACK_WIDTH   = 13.6         # cm — geometrische spoorbreedte hart-op-hart (documentatie)
-TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
+TRACK_WIDTH   = float(_cfg.get("track_width_cm", 13.6))
+                             # cm — geometrische spoorbreedte hart-op-hart (documentatie)
+TRACK_WIDTH_EFF = float(_cfg.get("track_width_eff_cm", 13.66))
+                             # cm — eerst analytisch meegeschaald met WHEEL_CIRC (12,20 x
                              # 21,33/19,1 = 13,62), daarna kompasmeting rotate_deg(360) (met de
                              # gecorrigeerde WHEEL_CIRC=21,33): 352,7° (-7,3°) -> 13,90; een
                              # derde meting over 3 omwentelingen (1080°, betere signaal/ruis)
@@ -209,6 +231,10 @@ TRACK_WIDTH_EFF = 13.66      # cm — eerst analytisch meegeschaald met WHEEL_CI
                              # -> 12,20. Was 11,26 (gemeten 2026-10-21 met de oude banden: rotate
                              # 360° links gaf 434,9° op de gyro, kompas ~420°; 13,6 x 360 /
                              # 434,9 = 11,26).
+                             # config.json-sleutel "stepper"."track_width_eff_cm" is de ENIGE
+                             # bron voor deze spoorbreedte: lib/LDR/ldr_scan_isr.py leest dezelfde
+                             # sleutel voor WHEEL_BASE_CM, zodat de twee nooit meer los van elkaar
+                             # gewijzigd kunnen worden.
 STEPS_REV     = 12800        # 1/64 microstepping (TMC2209, 200 volle stappen x 64)
 CM_PER_STEP   = WHEEL_CIRC / STEPS_REV                 # ~14,9 um/stap
 STEPS_PER_DEG = 3.14159265 / 180 * TRACK_WIDTH_EFF / CM_PER_STEP   # ~132 stappen verschil per graad
@@ -221,7 +247,8 @@ RAD_TO_DEG    = 57.29577951308232
 # marge voor een snelheidsverdubbeling, maar V_MAX_CM_S hieronder is BEWUST
 # nog niet aangepast -- wacht op hardwarevalidatie van max. startsnelheid/
 # versnelling (zie "Nog te verifiëren op hardware" in globale_specificatie_NL.md).
-V_MAX_CM_S    = 19.1         # 1,0 omw/s — stealthChop haalt ~300 rpm, we zitten op 60
+V_MAX_CM_S    = float(_cfg.get("v_max_cm_s", 19.1))
+                             # 1,0 omw/s — stealthChop haalt ~300 rpm, we zitten op 60
                              # [GEMETEN] 2026-11-01, bij ACCEL_CM_S2=55 (huidige waarde): 30cm
                              # gecommandeerd bij 19.1/24/27/29/29,5 cm/s liep steeds soepel
                              # (meetlint klopte, geen slip); bij 30 cm/s slipte een wiel en kwam
@@ -229,8 +256,10 @@ V_MAX_CM_S    = 19.1         # 1,0 omw/s — stealthChop haalt ~300 rpm, we zitt
                              # vlak onder 30 cm/s. V_MAX_CM_S zelf NIET verhoogd (blijft 19.1,
                              # ruime marge onder de grens); dit was puur een meting van het
                              # plafond, geen besluit om dichter tegen de grens aan te gaan.
-V_START_CM_S  = 1.91         # 0,1 omw/s — veilige startsnelheid, empirisch te verifieren
-ACCEL_CM_S2   = 55.0         # bepaalt de ramp-AFSTAND via (v1^2-v0^2)/(2a) = 3,28 cm.
+V_START_CM_S  = float(_cfg.get("v_start_cm_s", 1.91))
+                             # 0,1 omw/s — veilige startsnelheid, empirisch te verifieren
+ACCEL_CM_S2   = float(_cfg.get("accel_cm_s2", 55.0))
+                             # bepaalt de ramp-AFSTAND via (v1^2-v0^2)/(2a) = 3,28 cm.
                              # De S-curve piekt op 1,5x = 82 cm/s2 = 0,084 g.
                              # LET OP: omdat de S-curve aan begin en eind traag is,
                              # DUURT de ramp 0,55 s, niet de 0,31 s van een lineaire
@@ -265,9 +294,11 @@ MAX_DIFF_FRAC = 0.20         # maximale snelheidsdifferentie per wiel (+/- 20%)
 #                  naar rechts, gyro_z_deg_s(sensor)() moet positief zijn.
 # LDR_DIFF_SIGN    +1 = een positief LDR-verschil betekent dat de bron RECHTS
 #                  ligt. Verifieren: houd een lamp rechts, ldr_diff() > 0.
-MOTOR_TURN_SIGN = +1
-GYRO_Z_SIGN     = -1   # gemeten 2026-10-21 (ICM-20948, Z-as omhoog): rechtsom draaien gaf gz < 0
-LDR_DIFF_SIGN   = +1
+MOTOR_TURN_SIGN = int(_cfg.get("motor_turn_sign", +1))
+GYRO_Z_SIGN     = int(_cfg.get("gyro_z_sign", -1))
+                  # gemeten 2026-10-21 (ICM-20948, Z-as omhoog): rechtsom draaien gaf gz < 0
+LDR_DIFF_SIGN   = int(_cfg.get("ldr_diff_sign", +1))
+del _cfg
 
 
 # ----------------------------------------------------------------
@@ -1232,6 +1263,139 @@ async def adrive(dist_cm, speed_cm_s=V_MAX_CM_S, correction=None, **kw):
     while mv.service():
         await asyncio.sleep_ms(SLICE_MS // 2)
     return mv
+
+
+# ----------------------------------------------------------------
+# Live, joystick-gestuurde besturing (webserver-teleoperatie)
+# ----------------------------------------------------------------
+class LiveDrive:
+    """Continue rijbesturing zonder vaste totale afstand, voor handmatige
+    (joystick/webserver-)besturing -- in tegenstelling tot Move, dat een
+    bekende afstand aflegt met een HeadingController als automatische
+    koersregelaar. Hier IS de bestuurder de regelaar: geen ramp-tabellen,
+    geen HeadingController, gewoon arcade-mixing (tank-besturing) met een
+    software-versnellingslimiet.
+
+    Arcade-mixing (zelfde tekenconventie als _push_slice()/_turn_dirs() elders
+    in dit bestand: MOTOR_TURN_SIGN bepaalt welke fysieke motor "rechts" is):
+
+        a_doel = voorwaarts - MOTOR_TURN_SIGN * bocht
+        b_doel = voorwaarts + MOTOR_TURN_SIGN * bocht
+
+    Bij bocht!=0 en voorwaarts==0 geeft dit een zuivere draai op de plaats
+    (zelfde teken als _turn_dirs()); bij bocht!=0 tijdens het rijden een
+    vloeiende boog (zelfde teken als de koerscorrectie in _push_slice()).
+
+    Elk wiel heeft een EIGEN, onafhankelijk gesleufde (slew-rate-begrensde)
+    snelheid, begrensd door ACCEL_CM_S2 -- dat voorkomt een plotselinge
+    sprong in stapfrequentie (risico op gemiste stappen vanuit stilstand,
+    zie CYCLES_FIXED/V_START_CM_S hierboven) en zorgt dat een richtingwissel
+    altijd EERST door nul loopt. Bij een daadwerkelijke richtingwissel wordt
+    de FIFO pas geleegd (halt()) en DIR pas omgezet zodra de gesleufde
+    snelheid van dat wiel nul is -- nooit terwijl er nog stappen in de oude
+    richting onderweg zijn (zelfde transactionele patroon als Move.__init__).
+
+    Gebruik:
+        ld = LiveDrive()
+        ld.set_target(voorwaarts_as, bocht_as)   # beide in -1..1, bij elk
+                                                  # nieuw joystick-bericht
+        while besturing_actief:
+            ld.service()
+            await asyncio.sleep_ms(SLICE_MS // 2)
+        ld.stop()   # noodstop / deadman / einde sessie
+    """
+
+    def __init__(self, accel=ACCEL_CM_S2, max_speed_cm_s=V_MAX_CM_S):
+        self._accel = accel
+        self._max = max_speed_cm_s
+        self._fwd_axis = 0.0
+        self._turn_axis = 0.0
+        self._rate = {MA: 0.0, MB: 0.0}        # huidige, gesleufde snelheid (cm/s, signed)
+        self._dir_fwd = {MA: True, MB: True}   # laatst gezette DIR-richting
+        self._active = {MA: False, MB: False}  # DIR/enable al gezet voor huidig teken
+        self._t_prev = time.ticks_us()
+
+    def set_target(self, fwd_axis, turn_axis):
+        """Joystick-assen, elk geklemd op -1..1. Wordt pas bij de volgstappen
+        in service() daadwerkelijk toegepast (via de versnellingslimiet)."""
+        self._fwd_axis = max(-1.0, min(1.0, fwd_axis))
+        self._turn_axis = max(-1.0, min(1.0, turn_axis))
+
+    def stop(self):
+        """Onmiddellijke stop (noodstop/deadman): FIFO's wissen, snelheid op nul."""
+        self._fwd_axis = 0.0
+        self._turn_axis = 0.0
+        for m in _MOTORS:
+            m.halt()
+        self._rate[MA] = 0.0
+        self._rate[MB] = 0.0
+        self._active[MA] = self._active[MB] = False
+
+    def _service_motor(self, m, target_cm_s, dt_s):
+        rate = self._rate[m]
+        step = self._accel * dt_s
+        if rate < target_cm_s:
+            rate = min(target_cm_s, rate + step)
+        elif rate > target_cm_s:
+            rate = max(target_cm_s, rate - step)
+        self._rate[m] = rate
+
+        forward = rate >= 0.0
+        if abs(rate) < V_START_CM_S:
+            # Te langzaam om veilig te stappen (zelfde grens als plan()):
+            # de FIFO laten leeglopen i.p.v. nieuwe woorden pushen. De PIO
+            # stalt vanzelf met STEP laag zodra de FIFO leeg is (zie de kop
+            # van ramp_stepper hierboven) -- geen aparte stop-actie nodig.
+            # Alleen een eventuele richtingwissel verwerken we hier alvast,
+            # zodat de volgende keuze meteen met de juiste DIR begint.
+            if self._active[m] and forward != self._dir_fwd[m]:
+                m.halt()
+                m.set_dir(forward)
+                self._dir_fwd[m] = forward
+            return
+
+        if not self._active[m] or forward != self._dir_fwd[m]:
+            m.halt()
+            m.set_dir(forward)
+            m.enable()
+            self._dir_fwd[m] = forward
+            self._active[m] = True
+
+        r = rate_of(abs(rate))
+        while m.sm.tx_fifo() < FIFO_TARGET:
+            base = max(1, int(r * SLICE_MS / 1000.0 + 0.5))
+            m.push(base, _delay_for(r))
+
+    def service(self):
+        """Eén regelstap: versnellingslimiet toepassen en de FIFO's bijvullen.
+        Roep minstens elke SLICE_MS/2 aan (zelfde ritme als Move.service())."""
+        now = time.ticks_us()
+        dt = time.ticks_diff(now, self._t_prev) / 1_000_000.0
+        self._t_prev = now
+        if dt <= 0.0:
+            return
+        if dt > 0.2:
+            dt = 0.2   # een lange gat (GC-pauze, trage lus) niet laten doorslaan
+                       # in de versnelling als een onbedoelde snelheidssprong
+
+        fwd = self._fwd_axis * self._max
+        turn = self._turn_axis * self._max
+        a_doel = fwd - MOTOR_TURN_SIGN * turn
+        b_doel = fwd + MOTOR_TURN_SIGN * turn
+        piek = max(abs(a_doel), abs(b_doel))
+        if piek > self._max:
+            schaal = self._max / piek
+            a_doel *= schaal
+            b_doel *= schaal
+
+        self._service_motor(MA, a_doel, dt)
+        self._service_motor(MB, b_doel, dt)
+
+    def status(self):
+        """(snelheid cm/s, bochtsnelheid-equivalent cm/s) -- voor telemetrie/display.
+        Omgekeerde afleiding van de arcade-mixing in service()."""
+        a, b = self._rate[MA], self._rate[MB]
+        return (a + b) / 2.0, MOTOR_TURN_SIGN * (b - a) / 2.0
 
 
 # ----------------------------------------------------------------
