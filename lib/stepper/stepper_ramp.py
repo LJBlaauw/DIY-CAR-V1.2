@@ -697,9 +697,13 @@ class _Motor:
 # GPIO-toewijzing overgenomen uit stepper.py, zodat dit een drop-in vervanger is
 # en rotate('l') dezelfde kant op draait.
 #
-# LET OP: hardware/gpio_pinout.md noemt GPIO16/17/18 "stepper B" (U2) en
-# GPIO12/13/14 "stepper A" (U1) — precies omgekeerd aan de namen hieronder.
-# Functioneel maakt het niets uit, maar code en schema spreken elkaar tegen.
+# Naamgeving stepper A/B stond in de code en in hardware/gpio_pinout_NL.md
+# omgekeerd aan elkaar (functioneel geen probleem, wel verwarrend). Besloten
+# (gebruiker, 2026-11-12): voortaan "stepper links" (connector J4, U1,
+# GPIO12/13/14) en "stepper rechts" (connector J5, U2, GPIO16/17/18) als de
+# communicatie-/documentatienaamgeving. MA/MB hieronder zijn NIET hernoemd;
+# MA (GPIO16/17/18) = stepper rechts/J5 = het RECHTER wiel (MOTOR_TURN_SIGN),
+# MB (GPIO12/13/14) = stepper links/J4 = het linker wiel.
 MA = _Motor("A", 0, 2, step_gpio=17, dir_gpio=16, ena_gpio=18, fwd_level=0)
 MB = _Motor("B", 1, 3, step_gpio=13, dir_gpio=12, ena_gpio=14, fwd_level=1)
 _MOTORS = (MA, MB)

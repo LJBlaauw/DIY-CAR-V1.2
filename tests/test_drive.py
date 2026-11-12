@@ -9,12 +9,15 @@
 #   2) Rij 1 m vooruit naar de lichtbron, met LDR+gyro-bijsturing (koers).
 #   3) "Pak" het artikel (simulatie, geen echt voorwerp nodig) en trek de
 #      arm daarna 160 graden terug.
-#   4) Draai de kar 180 graden en rij terug naar het startpunt.
+#   4) Draai de kar 180 graden en rij terug naar het startpunt, met
+#      kompas-koershoud (de LDR kijkt nu van de lichtbron af, dus A-B is hier
+#      geen bruikbaar stuursignaal meer -- zie stepper_ramp.HeadingController).
 #   5) Strek de arm en open de grijper.
 #
 # Tijdens de hele rit toont de OLED (I2C0, GPIO0/1) vijf regels:
 #   1: huidige stap ("1 scan" .. "5 open")
-#   2: ultrasoon-afstand           "US =  xx.x cm"
+#   2: ultrasoon- EN ToF-afstand   "U= xx.x T= xx.x" (beide in cm; ToF op
+#      dezelfde I2C0-bus als de OLED, net als in tests/test_TOF.py)
 #   3: LDR A/B als relatieve verlichtingssterkte (E ~ R^(-1/GAMMA), 0-100%
 #      genormaliseerd; geen absolute lux) "LRa= xx% LRb= xx%"
 #   4: stepper-modus+snelheid+afstand van het huidige segment
@@ -43,6 +46,7 @@ import ldr_scan_isr as ldr
 import ultrasoon
 from servo_crl import ServoController
 from icm20948 import ICM20948, load_mag_calibration
+from vl53l1x import VL53L1X, LONG, RANGE_VALID
 import geometry as geo
 
 # ---------------- Instellingen ----------------
@@ -110,10 +114,37 @@ TERUG_VOOR_DRAAIEN_CM = 15.0
 TOLERANTIE_GRAD = 1.0
 SERVO_TIMEOUT_MS = 12000
 
+# Kompas-koershoud voor de terugrit (stap 4): HeadingController accepteert
+# elke callable als "ldr_diff" -- hier geven we 'm een kompas-koersfout in
+# GRADEN i.p.v. een LDR-logverschil, dus een eigen, veel kleinere kp dan de
+# LDR-kp_ldr=25,0 (die rekent in een heel andere, niet-lineaire eenheid).
+# Beide waarden zijn een eerste schatting, NOG NIET op hardware geverifieerd.
+# KOMPAS_DEADBAND_GRAD ruim boven de gemeten kompasruis houden (±1 uT
+# run-tot-run ~= 3 graden, zie config.json -> "icm20948"/globale_specificatie
+# -> IMU-sectie), anders regelt de controller op ruis i.p.v. een echte fout.
+KOMPAS_KP = 1.5             # graden/s gecommandeerd per graad koersfout
+KOMPAS_DEADBAND_GRAD = 3.0
+
 # ---------------- OLED ----------------
 i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0),
                        freq=400000, timeout=200_000)
 oled = SSD1306_I2C(128, 64, i2c_oled)
+
+# ---------------- ToF (VL53L1X, zelfde I2C0-bus als de OLED) ----------------
+# Zelfde instellingen als tests/test_TOF.py (33ms timing budget, 50ms periode).
+# Hier alleen voor de displayweergave -- GEEN koppeling met de obstakelstop in
+# stap 2 (die blijft op de ultrasoon, zoals al op hardware geverifieerd).
+TOF_TIMING_BUDGET_US = 33_000
+TOF_PERIOD_MS = 50
+tof = VL53L1X(i2c_oled)
+_tof_ok = tof.init()
+if _tof_ok:
+    tof.set_distance_mode(LONG)
+    tof.set_timing_budget_us(TOF_TIMING_BUDGET_US)
+    tof.start_continuous(TOF_PERIOD_MS)
+else:
+    print("! VL53L1X.init() mislukt -- ToF-afstand blijft leeg op het display")
+_tof_last_cm = None
 
 # ---------------- Gedeelde status voor het display ----------------
 _stap_tekst = "0 start"
@@ -139,8 +170,15 @@ def _servo_graden(sc, nr):
 
 
 def update_display(sc):
+    global _tof_last_cm
     cm, kind = ultrasoon.read_cm()
-    us_txt = "US = %5.1f cm" % cm if kind == 'ok' else "US = ----"
+    us_txt = "%5.1f" % cm if kind == 'ok' else " ----"
+
+    if _tof_ok and tof.data_ready():
+        mm = tof.read(blocking=False)
+        if tof.range_status == RANGE_VALID:
+            _tof_last_cm = mm / 10.0
+    tof_txt = "%5.1f" % _tof_last_cm if _tof_last_cm is not None else " ----"
 
     pa = _ldr_licht_pct(_adc_ldr_a.read_u16())
     pb = _ldr_licht_pct(_adc_ldr_b.read_u16())
@@ -155,7 +193,7 @@ def update_display(sc):
 
     oled.fill(0)
     oled.text(_stap_tekst, 0, 0)
-    oled.text(us_txt, 0, 10)
+    oled.text("U=%s T=%s" % (us_txt, tof_txt), 0, 10)
     oled.text("LRa=%3d%% LRb=%3d%%" % (round(pa), round(pb)), 0, 20)
     oled.text(regel4, 0, 30)
     oled.text(regel5, 0, 40)
@@ -196,6 +234,27 @@ def arm_naar(sc, graden, snelheid=ARM_SNELHEID_GRAD_S):
     sc.servo_pos(1, graden, snelheid)
     sc.servo_pos(2, graden, snelheid)
     wacht_arm_klaar(sc)
+
+
+def _kompas_heading_deg(sensor):
+    """Ruwe, al-gekalibreerde kompaskoers in graden (0-360), zelfde methode
+    als tests/test_kompas_richtingen.py en test_webserver_rc.py: de mount-/
+    hard-/soft-iron-correctie zit al in `sensor.magnetic` (load_mag_calibration())."""
+    mx, my, _mz = sensor.magnetic
+    return math.degrees(math.atan2(my, mx)) % 360.0
+
+
+def _hoekverschil(a, b):
+    """a - b, gewrapt naar -180..180 (zelfde helper als test_kompas_richtingen.py)."""
+    return (a - b + 540) % 360 - 180
+
+
+def _kompas_fout_fn(sensor, doel_heading_deg):
+    """Callable voor HeadingController(ldr_diff=...): positief = doel ligt
+    rechts van de huidige koers (moet naar rechts bijsturen)."""
+    def _f():
+        return _hoekverschil(doel_heading_deg, _kompas_heading_deg(sensor))
+    return _f
 
 
 def kaak_hoek_voor_breedte(breedte_cm):
@@ -290,22 +349,38 @@ def main():
         update_display(sc)
         print("draai klaar: heading=%.2f" % sr.heading())
 
+        # Kompasdoel voor de terugrit: niet de (voor-draai-heading + 180)
+        # BEREKENEN -- dat zou een kompasmeetfout EN een draaifout bij elkaar
+        # optellen. In plaats daarvan: na een korte settle-pauze gewoon meten
+        # waar de kar nu daadwerkelijk heen wijst, en DIE koers de hele
+        # terugrit vasthouden.
+        time.sleep_ms(200)
+        doel_heading_terugweg = _kompas_heading_deg(sensor)
+        print("kompasdoel terugweg: %.1f graden" % doel_heading_terugweg)
+
         # Terug naar het ECHTE startpunt: de heenweg (afstand_gereden, kan
         # korter zijn dan CRUISE_AFSTAND_CM als de ultrasoon-stop eerder
         # afbrak) minus de TERUG_VOOR_DRAAIEN_CM die net al achteruit is
         # gereden -- anders schiet de kar er 15cm voorbij.
         terugrit_cm = max(0.0, afstand_gereden - TERUG_VOOR_DRAAIEN_CM)
         _zet_mode("MF", CRUISE_SNELHEID_CM_S)
-        print("--- terugrijden %.0f cm naar het startpunt ---" % terugrit_cm)
+        print("--- terugrijden %.0f cm naar het startpunt (kompas-koershoud, doel=%.1f graden) ---"
+              % (terugrit_cm, doel_heading_terugweg))
+        hc_terug = sr.HeadingController(
+            ldr_diff=_kompas_fout_fn(sensor, doel_heading_terugweg),
+            gyro_rate=gyro_rate,
+            kp_ldr=KOMPAS_KP, deadband=KOMPAS_DEADBAND_GRAD)
+        # GEEN LDR-bijsturing meer: de kar kijkt nu van de lichtbron AF, dus
+        # A-B zou hier het verkeerde stuursignaal geven (zie de kop).
         sr.reset_PIO_distance()
-        mv = sr.drive(terugrit_cm, CRUISE_SNELHEID_CM_S)   # GEEN LDR-bijsturing:
-        # de kar kijkt nu van de lichtbron AF, dus A-B zou hier het verkeerde
-        # stuursignaal geven.
+        mv = sr.drive(terugrit_cm, CRUISE_SNELHEID_CM_S, correction=hc_terug)
         while mv.service():
             update_display(sc)
             time.sleep_ms(sr.SLICE_MS // 2)
         update_display(sc)
-        print("terug klaar: afstand=%.2f" % sr.distance())
+        print("terug klaar: afstand=%.2f eindheading=%.1f (doel %.1f, fout %.1f)"
+              % (sr.distance(), _kompas_heading_deg(sensor), doel_heading_terugweg,
+                 _hoekverschil(_kompas_heading_deg(sensor), doel_heading_terugweg)))
 
         # --- 5) Arm strekken en grijper openen ---
         _zet_stap("5 open")
