@@ -180,6 +180,49 @@ def meting(label=""):
 
 
 # ----------------------------------------------------------------
+# 0. HERIJK LDR_B_LN_C — snelle herstelkalibratie na een verschoven bron
+# ----------------------------------------------------------------
+def herijk_b_ln_c(afstand_cm=100):
+    """Herijk ALLEEN LDR_B_LN_C met één meting, op een bekende, LASER-
+    GEVERIFIEERDE oriëntatie -- i.p.v. de volledige meerpunts-sweep in
+    Meting_LDR_afstand_hoek.md. Bedoeld voor het geval de lichtbron zelf
+    verschoven/gedraaid is (niet de LDR's of de bedrading): de bundel is dan
+    niet meer perfect symmetrisch, waardoor scan()'s null-seek (A==B na
+    correctie) niet meer precies samenvalt met de werkelijke bronrichting --
+    gemeten (gebruiker, 2026-11-13) als 2cm uitlijnfout op 1m, was ~2mm.
+
+    LDR_B_GAMMA (de helling, een celeigenschap) blijft ONGEWIJZIGD; alleen
+    LDR_B_LN_C (de verschuiving) wordt herrekend zodat A en B precies gelijk
+    uitkomen op DEZE geverifieerde richting:
+
+        ln R_B' = (ln R_B - LN_C) / GAMMA  =  ln R_A
+        ->  LN_C_nieuw = ln R_B - GAMMA * ln R_A
+
+    Dit corrigeert het NETTO effect (celverschil + eventuele bundel-
+    asymmetrie) in één keer, maar is een puntmeting: als de asymmetrie
+    sterk met de afstand verandert, geldt deze correctie niet overal even
+    goed. Herhaal de volledige sweep als dat blijkt.
+    """
+    controleer_config()
+    print("\n=== Herijk LDR_B_LN_C (puntmeting op %d cm) ===" % afstand_cm)
+    input("  Richt de laser EXACT op de lichtbron op %d cm en druk op Enter... "
+          % afstand_cm)
+    ra, rb, xa, xb = lees()
+    ln_a = math.log(ra)
+    ln_b = math.log(rb)
+    oude_ln_c = ldr_scan_isr.LDR_B_LN_C
+    gamma_vast = ldr_scan_isr.LDR_B_GAMMA
+    nieuwe_ln_c = ln_b - gamma_vast * ln_a
+
+    print("  R_A=%.1f  R_B=%.1f  (adc %.0f/%.0f)" % (ra, rb, xa, xb))
+    print("  LDR_B_GAMMA blijft %.4f (ongewijzigd)" % gamma_vast)
+    print("  LDR_B_LN_C:  oud %.4f  ->  nieuw %.4f" % (oude_ln_c, nieuwe_ln_c))
+    print("\n  Zet in config.json, sectie \"ldr\":  \"b_ln_c\": %.4f" % nieuwe_ln_c)
+    print("  (en voeg een \"note\" toe met de datum en de aanleiding -- lamp gedraaid)")
+    return nieuwe_ln_c
+
+
+# ----------------------------------------------------------------
 # 1. GAMMA — LDR-exponent
 # ----------------------------------------------------------------
 def gamma(afstanden=(15, 20, 30, 40, 60), csv=None):
@@ -483,6 +526,11 @@ Aanbevolen volgorde:
   4. nauwkeurigheid()             wat is er haalbaar (geen hardware)
   5. meet_y()                     op de kar, na nullen op A-B
   6. dither_teken()               aan welke kant ligt de bundelas
+
+  herijk_b_ln_c(afstand_cm=100)   snelle puntherkalibratie van LDR_B_LN_C
+                                   (bv. na het verdraaien van de lichtbron
+                                   zelf, zonder de volledige sweep opnieuw
+                                   te hoeven doen) -- zie de eigen docstring
 """)
 
 

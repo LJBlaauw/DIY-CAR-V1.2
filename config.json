@@ -23,13 +23,13 @@
   "ldr": {
     "r_fixed_ohm": 47000,
     "b_gamma": 1.0772,
-    "b_ln_c": -0.6005,
+    "b_ln_c": -0.6094,
     "gamma": 0.55,
     "beam_w_deg": 43.3,
     "rot_scale": 1.0,
     "rot_scale_l": 1.0,
     "rot_scale_r": 1.0,
-    "note": "Pull-up R29/R30 = 47 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19, c herberekend voor 47 kOhm op 2026-10-20. gamma/beam_w_deg: R ~ E^-gamma (resistance-naar-licht-wet van 1 cel, los van b_gamma/b_ln_c die de A/B-cellen onderling vergelijken) en de 1/e-halfhoek van de lichtbundel, gemeten 2026-11-01 met tests/test_ldr_beam.py (gamma(): 0,55, R^2=0,993; bundel(): 43,3 graden, spreiding 13,5%). rot_scale/rot_scale_l/rot_scale_r: restcorrectie op de scanrotatie bovenop WHEEL_BASE_CM (zie sectie \"stepper\", track_width_eff_cm); hermeten 2026-11-01 na de nieuwe TPU-banden, rechtsom/linksom binnen de kompasruis van 1,0 -> geen richtingsafhankelijke correctie meer nodig."
+    "note": "Pull-up R29/R30 = 47 kOhm naar 3V3. Correctie cel B naar cel A: ln R_B' = (ln R_B - b_ln_c) / b_gamma. Gefit op afstandsmeting 0,15-4 m (Meting_LDR_afstand_hoek.md), restfout <= 0,036 in ln(R). Gekalibreerd 2026-10-19, c herberekend voor 47 kOhm op 2026-10-20. gamma/beam_w_deg: R ~ E^-gamma (resistance-naar-licht-wet van 1 cel, los van b_gamma/b_ln_c die de A/B-cellen onderling vergelijken) en de 1/e-halfhoek van de lichtbundel, gemeten 2026-11-01 met tests/test_ldr_beam.py (gamma(): 0,55, R^2=0,993; bundel(): 43,3 graden, spreiding 13,5%). rot_scale/rot_scale_l/rot_scale_r: restcorrectie op de scanrotatie bovenop WHEEL_BASE_CM (zie sectie \"stepper\", track_width_eff_cm); hermeten 2026-11-01 na de nieuwe TPU-banden, rechtsom/linksom binnen de kompasruis van 1,0 -> geen richtingsafhankelijke correctie meer nodig. b_ln_c HERIJKT 2026-11-13: de lamp in de lichtbron is gedraaid, waardoor de scan-uitlijning verschoof van ~2mm naar ~2cm op 1m -- de bundel is dus niet meer perfect symmetrisch, wat scan()'s null-seek (A==B na correctie) net naast de werkelijke bronrichting laat vallen. Puntherkalibratie i.p.v. de volledige sweep (tests/test_ldr_beam.py, herijk_b_ln_c()): laser exact op de bron op 1m, b_ln_c = ln(R_B) - b_gamma*ln(R_A), b_gamma ONGEWIJZIGD gelaten (celeigenschap, geen bundeleigenschap). Twee metingen: eerste poging R_A=31624,5 R_B=38369,2 (adc 28390/28026) -> -0,6066, mogelijk met de USB-kabel voor een LDR; herhaald met bevestigd vrije kabel: R_A=32177,6 R_B=38983,3 (adc 28350/27754) -> -0,6094 (was -0,6005) -- deze tweede, betrouwbaardere meting aangehouden (verschil tussen beide metingen was klein, dus de kabel had kennelijk weinig invloed). Dit is een puntmeting op 1m; als de uitlijning op andere afstanden nog afwijkt is de volledige meerpunts-sweep nodig."
   },
   "stepper": {
     "wheel_circ_cm": 21.33,
