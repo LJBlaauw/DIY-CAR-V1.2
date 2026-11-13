@@ -49,6 +49,7 @@
 # tests/test_drive.py.
 # ================================================================
 
+import sys
 import time
 import json
 import network
@@ -65,6 +66,11 @@ from servo_crl import ServoController
 from icm20948 import ICM20948, load_mag_calibration
 from vl53l1x import VL53L1X, LONG, RANGE_VALID
 import geometry as geo
+
+sys.path.append('/tests')   # test_autodrive.py staat NIET in het platte /lib,
+                             # zie upload_to_pico.sh (tests/ wordt als submap
+                             # gekopieerd, niet platgeslagen)
+import test_autodrive as autodrive
 
 # ----------------------------------------------------------------
 # Instellingen
@@ -142,13 +148,16 @@ _cmd = {"fwd": 0.0, "turn": 0.0, "reach": 0.0, "grip": 0.0}
 _last_cmd_ms = time.ticks_ms()
 _laser_on = False
 _scanning = False
+_autodriving = False
+_motor_power_on = True
 _state = {
     "heading": 0.0, "ldr_a": 0.0, "ldr_b": 0.0,
     "us_cm": None, "us_ok": False,
     "tof_cm": None, "tof_ok": False,
     "j1_pct": 0.0, "j2_pct": 0.0, "grip_pct": 0.0,
     "speed_cm_s": 0.0, "turn_cm_s": 0.0,
-    "laser": False, "scanning": False, "deadman_ms": 0,
+    "laser": False, "scanning": False, "autodriving": False,
+    "motor_power": True, "deadman_ms": 0,
 }
 
 
@@ -168,6 +177,25 @@ def _do_scan():
         _state["scanning"] = False
 
 
+def _do_autodrive():
+    """Volledige autonome pick-up-missie (tests/test_autodrive.py), hergebruikt
+    de hier AL aanwezige sc/sensor/tof (zie autodrive.set_hardware()) i.p.v.
+    ze opnieuw aan te maken. BLOKKEREND voor de hele duur (30s-2min) -- zelfde
+    bewust aanvaarde tradeoff als _do_scan() hierboven, maar langer: telemetrie
+    EN de STOP-knop werken pas weer zodra de missie klaar is (zie de kop van
+    dit bestand en tests/test_autodrive.py: missie())."""
+    global _autodriving
+    ld.stop()
+    _autodriving = True
+    _state["autodriving"] = True
+    try:
+        autodrive.set_hardware(None, tof, _tof_ok)
+        autodrive.missie(sc, sensor)
+    finally:
+        _autodriving = False
+        _state["autodriving"] = False
+
+
 def _toggle_laser():
     global _laser_on
     _laser_on = not _laser_on
@@ -176,6 +204,23 @@ def _toggle_laser():
     else:
         sc.laser_off()
     _state["laser"] = _laser_on
+
+
+def _toggle_motor_power():
+    """Rijmotoren (steppers) stroomloos AAN/UIT, bv. om de kar met de hand te
+    kunnen verplaatsen zonder tegen de drivers in te duwen. UIT: ld.stop()
+    (FIFO's leeg, LiveDrive's active-vlag op False) EN sr.disable() (ENA-pin
+    beide drivers), zodat control_task de joystick ook daadwerkelijk negeert
+    (zie de motor_power-check hierboven) i.p.v. dat LiveDrive de driver bij de
+    volgende joystick-beweging stilletjes weer zelf inschakelt."""
+    global _motor_power_on
+    _motor_power_on = not _motor_power_on
+    if _motor_power_on:
+        sr.enable()
+    else:
+        ld.stop()
+        sr.disable()
+    _state["motor_power"] = _motor_power_on
 
 
 # ----------------------------------------------------------------
@@ -232,10 +277,12 @@ async def control_task():
             tof_cm = _state["tof_cm"]
             tof_ok = True
 
-        if stil or _scanning:
+        if stil or _scanning or _autodriving:
             fwd, turn, reach, grip = 0.0, 0.0, 0.0, 0.0
         else:
             fwd, turn, reach, grip = _cmd["fwd"], _cmd["turn"], _cmd["reach"], _cmd["grip"]
+            if not _motor_power_on:
+                fwd = turn = 0.0   # rijmotoren bewust stroomloos, zie _toggle_motor_power()
             # obstakelstop: alleen VERDER vooruit rijden blokkeren, nooit achteruit/draaien
             kortste = None
             if us_ok and us_cm is not None:
@@ -291,8 +338,14 @@ def _handle_message(msg):
     if cmd == "scan":
         _do_scan()
         return
+    if cmd == "autodrive":
+        _do_autodrive()
+        return
     if cmd == "laser_toggle":
         _toggle_laser()
+        return
+    if cmd == "motor_toggle":
+        _toggle_motor_power()
         return
     if cmd == "stop":
         ld.stop()
@@ -320,42 +373,54 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>DIY CAR</title>
 <style>
- :root{--joy: min(30vh, 34vw)}
+ :root{--joy: min(34vh, 38vw)}
  html,body{height:100%;margin:0;background:#0e0e10;color:#ebebeb;font-family:sans-serif;
    overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:none}
  body{display:flex;flex-direction:column;box-sizing:border-box;padding:1vh 1vw;gap:1vh}
  .panel{background:#1a1a1e;border:2px solid #323238;border-radius:12px;padding:0.8vh 1.2vw;
    box-sizing:border-box;min-width:0}
- .title{color:#999;font-size:clamp(9px,1.6vh,13px);letter-spacing:.05em;white-space:nowrap}
+ .title{color:#999;font-size:clamp(11px,1.8vh,14px);letter-spacing:.05em;white-space:nowrap}
  #toprow{display:flex;justify-content:space-between;align-items:flex-start;gap:1vw;flex:0 0 auto}
  #topleft{flex:1 1 0}
  #topmid{flex:1.4 1 0;text-align:center}
  #topright{flex:1 1 0;text-align:center}
- .row{display:flex;justify-content:space-between;font-size:clamp(10px,1.8vh,15px);margin:2px 0}
- .big{font-weight:bold;font-size:clamp(13px,2.4vh,20px);color:#eee}
+ .row{display:flex;justify-content:space-between;font-size:clamp(12px,2vh,16px);margin:2px 0}
+ .big{font-weight:bold;font-size:clamp(15px,2.6vh,21px);color:#eee}
  .ldrrow{display:flex;justify-content:space-between;align-items:center;margin:2px 0}
- .pct{font-size:clamp(14px,3vh,26px);font-weight:bold;color:#0a6}
+ .pct{font-size:clamp(16px,3.2vh,27px);font-weight:bold;color:#0a6}
  #arrow{flex:1;height:clamp(16px,3vh,30px);margin:0 4px}
  .btnrow{display:flex;justify-content:space-between;margin-top:4px;gap:6px}
  button{background:#2a2a30;color:#eee;border:1px solid #46464e;border-radius:10px;
-   font-size:clamp(11px,1.8vh,15px);font-weight:bold;padding:0.8vh 1vw;flex:1}
+   font-size:clamp(13px,2vh,16px);font-weight:bold;padding:0.8vh 1vw;flex:1}
  button:active{background:#0a6}
- #laserbtn.aan{background:#664a10;border-color:#c89b3a;color:#f0c850}
+ #laserbtn.aan, #autodrivebtn.aan, #motorbtn.uit{background:#664a10;border-color:#c89b3a;color:#f0c850}
  #compass{display:block;margin:0 auto;width:min(14vh,16vw);height:min(14vh,16vw)}
- #bottomrow{display:flex;justify-content:space-between;align-items:center;flex:1 1 auto;
-   min-height:0;gap:1vw}
- .joywrap{width:var(--joy);text-align:center;flex:0 0 auto}
+ #midrow{display:flex;justify-content:center;align-items:center;gap:3vw;flex:0 0 auto}
+ #midrow button{flex:0 0 auto;width:min(22vw,140px);height:min(8vh,48px);
+   font-size:clamp(14px,2.2vh,18px);border-radius:12px}
+ #stopbtn{background:#780f0f;border:3px solid #d22d2d;color:#ffe6e6}
+ #stopbtn:active{background:#d22d2d}
+ #bottomrow{display:flex;justify-content:center;align-items:center;flex:1 1 auto;
+   min-height:0;gap:3vw}
+ .joywrap{text-align:center;flex:0 0 auto}
+ .joyrow{display:flex;align-items:center;justify-content:center;gap:10px}
  .joy{width:var(--joy);height:var(--joy);border-radius:50%;background:#16161a;
-   border:2px solid #323238;position:relative;touch-action:none}
+   border:2px solid #323238;position:relative;touch-action:none;flex:0 0 auto}
  .knob{width:28%;height:28%;border-radius:50%;background:#0a6;position:absolute;
    left:50%;top:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 2px #063}
- .joylabel{position:absolute;color:#777;font-size:clamp(9px,1.5vh,12px)}
- .readout{margin-top:4px;font-size:clamp(10px,1.6vh,14px);color:#ddd}
- #stopbtn{flex:0 0 auto;width:min(22vw,140px);height:min(10vh,56px);background:#780f0f;
-   border:3px solid #d22d2d;color:#ffe6e6;font-size:clamp(14px,2.6vh,22px);border-radius:12px}
- #stopbtn:active{background:#d22d2d}
+ .joylabel{position:absolute;color:#777;font-size:clamp(10px,1.7vh,13px)}
+ .readout{margin-top:4px;font-size:clamp(12px,1.8vh,15px);color:#ddd}
+ .vslider{display:flex;flex-direction:column;align-items:center;flex:0 0 auto}
+ .vslider-inner{position:relative;width:34px;height:var(--joy);
+   display:flex;align-items:center;justify-content:center}
+ .vslider-inner input[type=range]{position:absolute;width:var(--joy);height:28px;
+   transform:rotate(-90deg);touch-action:auto;accent-color:#0a6}
+ .sliderlabel{margin-top:4px;font-size:clamp(10px,1.7vh,13px);color:#ddd;white-space:nowrap}
  #status{position:fixed;right:6px;bottom:2px;font-size:10px;color:#777}
  #status.verbonden{color:#0a6}
+ @media (orientation: landscape){
+   #bottomrow{justify-content:space-evenly}
+ }
 </style></head><body>
 
 <div id="toprow">
@@ -378,6 +443,9 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
     <button id="scanbtn">SCAN</button>
     <button id="laserbtn">LASER AAN</button>
   </div>
+  <div class="btnrow">
+    <button id="autodrivebtn">AUTODRIVE</button>
+  </div>
 </div>
 
 <div class="panel" id="topright">
@@ -385,6 +453,11 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   <canvas id="compass" width="160" height="160"></canvas>
   <div class="big" id="heading">--&deg;</div>
 </div>
+</div>
+
+<div id="midrow">
+  <button id="motorbtn">MOTOR AAN</button>
+  <button id="stopbtn">STOP</button>
 </div>
 
 <div id="bottomrow">
@@ -400,16 +473,22 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   <div class="readout" id="armreadout">J1 0% &nbsp; J2 0% &nbsp; grijper 0%</div>
 </div>
 
-<button id="stopbtn">STOP</button>
-
 <div class="joywrap" id="drivewrap">
   <div class="title">RIJDEN</div>
-  <div class="joy" id="drivejoy">
-    <div class="joylabel" style="top:4px;left:50%;transform:translateX(-50%)">vooruit</div>
-    <div class="joylabel" style="bottom:4px;left:50%;transform:translateX(-50%)">achteruit</div>
-    <div class="joylabel" style="left:6px;top:50%;transform:translateY(-50%)">bocht links</div>
-    <div class="joylabel" style="right:6px;top:50%;transform:translateY(-50%)">bocht rechts</div>
-    <div class="knob" id="driveknob"></div>
+  <div class="joyrow">
+    <div class="joy" id="drivejoy">
+      <div class="joylabel" style="top:4px;left:50%;transform:translateX(-50%)">vooruit</div>
+      <div class="joylabel" style="bottom:4px;left:50%;transform:translateX(-50%)">achteruit</div>
+      <div class="joylabel" style="left:6px;top:50%;transform:translateY(-50%)">bocht links</div>
+      <div class="joylabel" style="right:6px;top:50%;transform:translateY(-50%)">bocht rechts</div>
+      <div class="knob" id="driveknob"></div>
+    </div>
+    <div class="vslider">
+      <div class="vslider-inner">
+        <input type="range" id="speedslider" min="10" max="100" value="50">
+      </div>
+      <div class="sliderlabel" id="speedval">max 50%</div>
+    </div>
   </div>
   <div class="readout" id="drivereadout">0.0 cm/s &nbsp; 0.0&deg;/s</div>
 </div>
@@ -421,6 +500,12 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 let ws;
 let drive = {fwd:0, turn:0};
 let arm = {reach:0, grip:0};
+let speedScale = 0.5;   // slider: beperkt de maximale rijsnelheid (joystick blijft -1..1)
+
+document.getElementById('speedslider').addEventListener('input', (ev) => {
+  speedScale = ev.target.value / 100;
+  document.getElementById('speedval').textContent = "max " + ev.target.value + "%";
+});
 
 function connect(){
   ws = new WebSocket("ws://" + location.host + "/ws");
@@ -475,12 +560,18 @@ function setupJoystick(joyId, knobId, onChange){
   joy.addEventListener('pointercancel', release);
 }
 
-setupJoystick('drivejoy', 'driveknob', (x, y) => { drive.fwd = y; drive.turn = x; sendDrive(); });
+setupJoystick('drivejoy', 'driveknob', (x, y) => { drive.fwd = y * speedScale; drive.turn = x * speedScale; sendDrive(); });
 setupJoystick('armjoy', 'armknob', (x, y) => { arm.reach = y; arm.grip = x; sendDrive(); });
 
 document.getElementById('scanbtn').onclick = () => sendCmd('scan');
 document.getElementById('laserbtn').onclick = () => sendCmd('laser_toggle');
+document.getElementById('motorbtn').onclick = () => sendCmd('motor_toggle');
 document.getElementById('stopbtn').onclick = () => sendCmd('stop');
+document.getElementById('autodrivebtn').onclick = () => {
+  if (confirm("Volledige autonome missie starten? Kar rijdt zelfstandig tot de missie klaar is (STOP werkt dan niet).")) {
+    sendCmd('autodrive');
+  }
+};
 
 // ---------------- Kompas ----------------
 const cv = document.getElementById('compass');
@@ -523,6 +614,14 @@ function render(d){
 
   document.getElementById('laserbtn').className = d.laser ? 'aan' : '';
   document.getElementById('laserbtn').textContent = d.laser ? 'LASER UIT' : 'LASER AAN';
+
+  const adbtn = document.getElementById('autodrivebtn');
+  adbtn.className = d.autodriving ? 'aan' : '';
+  adbtn.textContent = d.autodriving ? 'AUTODRIVE BEZIG...' : 'AUTODRIVE';
+
+  const motorbtn = document.getElementById('motorbtn');
+  motorbtn.className = d.motor_power ? '' : 'uit';
+  motorbtn.textContent = d.motor_power ? 'MOTOR AAN' : 'MOTOR UIT';
 
   document.getElementById('heading').textContent = d.heading.toFixed(0) + "°";
   drawCompass(d.heading);

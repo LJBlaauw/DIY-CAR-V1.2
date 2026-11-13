@@ -233,26 +233,47 @@ SERVO_TIMEOUT_MS = 12000
 KOMPAS_KP = 1.5             # graden/s gecommandeerd per graad koersfout
 KOMPAS_DEADBAND_GRAD = 3.0
 
-# ---------------- OLED ----------------
-i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0),
-                       freq=400000, timeout=200_000)
-oled = SSD1306_I2C(128, 64, i2c_oled)
-
-# ---------------- ToF (VL53L1X, zelfde I2C0-bus als de OLED) ----------------
-# Zelfde instellingen als tests/test_TOF.py (33ms timing budget, 50ms periode).
-# Wordt hier WEL gebruikt in de obstakelstop (zie _obstakel_afstand()), anders
-# dan in tests/test_drive.py waar het alleen display is.
+# ---------------- OLED / ToF (gedeeld) ----------------
+# `oled`/`tof`/`_tof_ok` zijn hier GEEN module-aanmaak meer (dat zou bij
+# "import test_autodrive" vanuit tests/test_webserver_rc.py een TWEEDE
+# I2C(0,...)/VL53L1X-object op dezelfde bus/sensor aanmaken, naast de bus die
+# de webserver zelf al beheert). Standalone gebruik (mpremote run) maakt ze
+# zelf aan via _init_own_hardware() (aangeroepen vanuit main()); een
+# aanroeper die de bus al zelf beheert geeft zijn EIGEN objecten door via
+# set_hardware() (zie tests/test_webserver_rc.py, cmd "autodrive").
 TOF_TIMING_BUDGET_US = 33_000
 TOF_PERIOD_MS = 50
-tof = VL53L1X(i2c_oled)
-_tof_ok = tof.init()
-if _tof_ok:
-    tof.set_distance_mode(LONG)
-    tof.set_timing_budget_us(TOF_TIMING_BUDGET_US)
-    tof.start_continuous(TOF_PERIOD_MS)
-else:
-    print("! VL53L1X.init() mislukt -- ToF-afstand blijft leeg, obstakelstop valt terug op ultrasoon alleen")
+oled = None
+tof = None
+_tof_ok = False
 _tof_last_cm = None
+
+
+def set_hardware(oled_obj, tof_obj, tof_ok):
+    """Hergebruik AL BESTAANDE OLED/ToF-objecten (bv. van tests/
+    test_webserver_rc.py) i.p.v. ze hier opnieuw aan te maken. oled_obj mag
+    None zijn (geen display beschikbaar); update_display() slaat de OLED-
+    tekening dan over."""
+    global oled, tof, _tof_ok
+    oled = oled_obj
+    tof = tof_obj
+    _tof_ok = tof_ok
+
+
+def _init_own_hardware():
+    """Standalone-gebruik (mpremote run): eigen I2C0 + OLED + ToF aanmaken."""
+    global oled, tof, _tof_ok
+    i2c_oled = machine.I2C(0, scl=machine.Pin(1), sda=machine.Pin(0),
+                           freq=400000, timeout=200_000)
+    oled = SSD1306_I2C(128, 64, i2c_oled)
+    tof = VL53L1X(i2c_oled)
+    _tof_ok = tof.init()
+    if _tof_ok:
+        tof.set_distance_mode(LONG)
+        tof.set_timing_budget_us(TOF_TIMING_BUDGET_US)
+        tof.start_continuous(TOF_PERIOD_MS)
+    else:
+        print("! VL53L1X.init() mislukt -- ToF-afstand blijft leeg, obstakelstop valt terug op ultrasoon alleen")
 
 # ---------------- Gedeelde status voor het display ----------------
 _stap_tekst = "0 start"
@@ -279,13 +300,16 @@ def _servo_graden(sc, nr):
 
 def update_display(sc):
     global _tof_last_cm
-    cm, kind = ultrasoon.read_cm()
-    us_txt = "%5.1f" % cm if kind == 'ok' else " ----"
-
     if _tof_ok and tof.data_ready():
         mm = tof.read(blocking=False)
         if tof.range_status == RANGE_VALID:
             _tof_last_cm = mm / 10.0
+
+    if oled is None:
+        return   # geen display beschikbaar (gedeeld gebruik, zie set_hardware())
+
+    cm, kind = ultrasoon.read_cm()
+    us_txt = "%5.1f" % cm if kind == 'ok' else " ----"
     tof_txt = "%5.1f" % _tof_last_cm if _tof_last_cm is not None else " ----"
 
     pa = _ldr_licht_pct(_adc_ldr_a.read_u16())
@@ -484,20 +508,13 @@ def _kompas_fout_fn(sensor, doel_heading_deg):
     return _f
 
 
-# ---------------- Hoofdprogramma ----------------
-def main():
-    sc = ServoController()
-    sc.servo_cur_limit(200)   # stroomlimiet grijper, net als in test_all.py/test_servo.py
-                              # (geldt in POSITIE-modus; grijp_op_stroom() hieronder
-                              # schakelt tijdelijk naar SETPOINT-modus, zie servo_crl.py)
-
-    i2c_sensor = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
-    sensor = ICM20948(i2c_sensor, **load_mag_calibration())
+# ---------------- Missie (herbruikbaar: ook aangeroepen vanuit tests/
+# test_webserver_rc.py, cmd "autodrive", met de daar AL bestaande sc/sensor/
+# tof -- zie set_hardware() hierboven. BLOKKEREND, zelfde bewust aanvaarde
+# tradeoff als ldr.scan() in dat bestand: tijdens de hele missie bevriezen
+# telemetrie EN de STOP-knop daar, zie de kop van test_webserver_rc.py) ----
+def missie(sc, sensor):
     gyro_rate = sr.gyro_z_deg_s(sensor)
-
-    ldr.start_synced_sampling(sc)
-    time.sleep_ms(200)   # eerste tick(s) laten landen voor read_synced()
-
     try:
         # --- 1) Scan + richten + laser aan ---
         _zet_stap("1 scan")
@@ -646,4 +663,22 @@ def main():
             update_display(sc)
 
 
-main()
+# ---------------- Standalone (mpremote run) ----------------
+def main():
+    sc = ServoController()
+    sc.servo_cur_limit(200)   # stroomlimiet grijper, net als in test_all.py/test_servo.py
+                              # (geldt in POSITIE-modus; grijp_op_stroom() hieronder
+                              # schakelt tijdelijk naar SETPOINT-modus, zie servo_crl.py)
+
+    i2c_sensor = machine.I2C(1, scl=machine.Pin(11), sda=machine.Pin(10), freq=400000)
+    sensor = ICM20948(i2c_sensor, **load_mag_calibration())
+
+    ldr.start_synced_sampling(sc)
+    time.sleep_ms(200)   # eerste tick(s) laten landen voor read_synced()
+
+    _init_own_hardware()
+    missie(sc, sensor)
+
+
+if __name__ == "__main__":
+    main()
