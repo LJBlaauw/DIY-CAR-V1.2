@@ -94,10 +94,15 @@ AP_PASSWORD = _net_cfg.get("ap_password", "diycar12345")
 del _net_cfg
 
 DEADMAN_MS = 400          # geen joystick-bericht binnen deze tijd -> noodstop
-TELEMETRY_HZ = 10
+TELEMETRY_HZ = 5          # was 10; minder uitgaand verkeer deelt dezelfde WiFi/TCP-
+                          # capaciteit als de joystick-berichten (zie ENOBUFS-analyse
+                          # in de kop van dit bestand)
 ARM_MAX_SPEED_DEG_S = 60.0
 TOF_TIMING_BUDGET_US = 33_000
 TOF_PERIOD_MS = 50
+TOF_POLL_MS = 40          # control_task draait elke ~10ms, maar de ToF levert zelf maar
+                          # elke TOF_PERIOD_MS nieuwe data -- data_ready() elke tick
+                          # bevragen is dus grotendeels overbodig I2C-verkeer
 
 # ----------------------------------------------------------------
 # WiFi -- Access Point
@@ -150,6 +155,7 @@ _laser_on = False
 _scanning = False
 _autodriving = False
 _motor_power_on = True
+_tof_last_poll_ms = 0
 _state = {
     "heading": 0.0, "ldr_a": 0.0, "ldr_b": 0.0,
     "us_cm": None, "us_ok": False,
@@ -258,6 +264,7 @@ def _apply_arm(reach_axis, grip_axis):
 # onafhankelijk van een websocket-verbinding -- zie de kop van dit bestand)
 # ----------------------------------------------------------------
 async def control_task():
+    global _tof_last_poll_ms
     while True:
         now = time.ticks_ms()
         stil = time.ticks_diff(now, _last_cmd_ms) > DEADMAN_MS
@@ -267,7 +274,13 @@ async def control_task():
         us_ok = (us_kind == 'ok')
         tof_cm = None
         tof_ok = False
-        if _tof_ok and tof.data_ready():
+        # ToF over I2C alleen bevragen op zijn eigen TOF_POLL_MS-cadans (de
+        # sensor levert toch maar elke TOF_PERIOD_MS nieuwe data) i.p.v. elke
+        # ~10ms control-tick -- scheelt grotendeels overbodig I2C-verkeer.
+        poll_due = _tof_ok and time.ticks_diff(now, _tof_last_poll_ms) >= TOF_POLL_MS
+        if poll_due:
+            _tof_last_poll_ms = now
+        if poll_due and tof.data_ready():
             mm = tof.read(blocking=False)
             tof_ok = (tof.range_status == RANGE_VALID)
             if tof_ok:
@@ -516,8 +529,20 @@ function connect(){
   ws.onmessage = (e) => render(JSON.parse(e.data));
 }
 
-function sendDrive(){
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({drive, arm}));
+function sendDrive(force){
+  // EEN producent (de setInterval hieronder, 10 Hz): pointer-events werken
+  // alleen nog de lokale drive/arm-toestand bij (zie setupJoystick), ze
+  // sturen zelf NIETS meer. Zonder deze opzet stuurde elke pointermove (tot
+  // 60-120 Hz tijdens slepen) een EXTRA bericht naast de timer -- te veel
+  // kleine websocket-sends kort op elkaar putte lwIP's TCP-buffer op de Pico
+  // uit (OSError ENOBUFS, "Task exception wasn't retrieved" in microdot.py).
+  if (!(ws && ws.readyState === 1)) return;
+  // Backpressure: als de browser nog niet-verstuurde data heeft liggen, sla
+  // deze tussenstand over -- het volgende bericht (timer of een geforceerde
+  // send bij loslaten) bevat toch de nieuwste volledige toestand. `force`
+  // omzeilt dit voor de nulstand bij loslaten (veiligheid, zie release()).
+  if (!force && ws.bufferedAmount > 1024) return;
+  ws.send(JSON.stringify({drive, arm}));
 }
 setInterval(sendDrive, 100);   // continue stroom i.p.v. alleen bij verandering (deadman!)
 
@@ -552,6 +577,7 @@ function setupJoystick(joyId, knobId, onChange){
     active = false;
     setKnob(0, 0);
     onChange(0, 0);
+    sendDrive(true);   // nulstand niet tot 100ms laten wachten op de timer (veiligheid)
   }
 
   joy.addEventListener('pointerdown', (ev) => { active = true; joy.setPointerCapture(ev.pointerId); fromEvent(ev); });
@@ -560,8 +586,8 @@ function setupJoystick(joyId, knobId, onChange){
   joy.addEventListener('pointercancel', release);
 }
 
-setupJoystick('drivejoy', 'driveknob', (x, y) => { drive.fwd = y * speedScale; drive.turn = x * speedScale; sendDrive(); });
-setupJoystick('armjoy', 'armknob', (x, y) => { arm.reach = y; arm.grip = x; sendDrive(); });
+setupJoystick('drivejoy', 'driveknob', (x, y) => { drive.fwd = y * speedScale; drive.turn = x * speedScale; });
+setupJoystick('armjoy', 'armknob', (x, y) => { arm.reach = y; arm.grip = x; });
 
 document.getElementById('scanbtn').onclick = () => sendCmd('scan');
 document.getElementById('laserbtn').onclick = () => sendCmd('laser_toggle');
@@ -658,10 +684,21 @@ async def ws_handler(request, ws):
             msg = await ws.receive()
             _handle_message(msg)
 
+    t_sender = asyncio.create_task(sender())
+    t_receiver = asyncio.create_task(receiver())
     try:
-        await asyncio.gather(sender(), receiver())
+        await asyncio.gather(t_sender, t_receiver)
     except Exception as e:
         print("websocket gesloten:", e)
+    finally:
+        # asyncio.gather() annuleert bij een fout NIET automatisch de andere
+        # taak (zelfde gedrag als CPython-asyncio) -- zonder dit bleef bv.
+        # sender() op de achtergrond doorschrijven naar een al gesloten
+        # websocket, wat een ONGEVANGEN fout geeft ("Task exception wasn't
+        # retrieved" uit microdot.py) zodra de verbinding echt dood is, vooral
+        # na herhaalde reconnects.
+        t_sender.cancel()
+        t_receiver.cancel()
 
 
 # ----------------------------------------------------------------
