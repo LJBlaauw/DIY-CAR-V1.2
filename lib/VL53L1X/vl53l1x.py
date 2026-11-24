@@ -179,6 +179,18 @@ def status_name(status):
 
 # ---- Timeout-rekenhulp (VL53L1_calc_timeout_us/-mclks, decode/encodeTimeout) ----
 
+def spad_nummer(rij, kolom):
+    """SPAD-nummer voor ROI_CONFIG__USER_ROI_CENTRE_SPAD, uit de 16x16-tabel
+    van ST (UM2555/UM2356, bovenaanzicht met pin 1 linksboven): rij 0..7
+    loopt van 128+8*kolom+rij, rij 8..15 van 127-8*kolom-(rij-8). Het midden
+    (rij 7, kolom 8) is 199. LET OP: de lens keert het beeld om, dus welke
+    rij-richting fysiek "omhoog" kijkt hangt ook van de montage af -- op de
+    kar controleren (tests/test_lichtbak_scan.py, roi_test())."""
+    if rij < 8:
+        return 128 + 8 * kolom + rij
+    return 127 - 8 * kolom - (rij - 8)
+
+
 def _decode_timeout(reg_val):
     return ((reg_val & 0xFF) << (reg_val >> 8)) + 1
 
@@ -223,6 +235,8 @@ class VL53L1X:
         # publiek resultaat (getRangingData())
         self.range_mm = 0
         self.range_status = NONE_STATUS
+        self.signal_mcps = 0.0
+        self.ambient_mcps = 0.0
 
     # ---------- lage-niveau I2C (16-bit registeradres, big-endian) ----------
     def _write(self, reg, data):
@@ -259,11 +273,20 @@ class VL53L1X:
         self._write8(SOFT_RESET, 0x01)
         time.sleep_ms(1)
 
+        # Tijdens het opstarten na de soft reset kan de sensor I2C-verzoeken
+        # NACKen (OSError). Pololu wacht dan ook gewoon door
+        # (`|| last_status != 0`), in plaats van af te breken.
         t0 = time.ticks_ms()
-        while (self._read8(FIRMWARE__SYSTEM_STATUS) & 0x01) == 0:
+        while True:
+            try:
+                if self._read8(FIRMWARE__SYSTEM_STATUS) & 0x01:
+                    break
+            except OSError:
+                pass
             if time.ticks_diff(time.ticks_ms(), t0) > timeout_ms:
                 self.did_timeout = True
                 return False
+            time.sleep_ms(1)
 
         if io_2v8:
             self._write8(PAD_I2C_HV__EXTSUP_CONFIG,
@@ -384,6 +407,25 @@ class VL53L1X:
                       _encode_timeout(_timeout_us_to_mclks(range_config_timeout_us, macro_period_us)))
         return True
 
+    # ---------- ROI (region of interest) ----------
+    def set_roi(self, width, height, centre_spad=None):
+        """Stel het meetvenster in: width x height SPADs (4..16) rond
+        centre_spad (zie spad_nummer()). Default/na init is 16x16 rond 199
+        (het midden). Een kleiner venster geeft een smallere bundel (ST: ~27
+        graden bij 16x16, ~15 graden bij 4x4), maar ook minder signaal.
+
+        Zoals Pololu's setROISize()/setROICenter(): bij width of height > 10
+        wordt het centrum op 199 gezet, tenzij centre_spad expliciet is
+        meegegeven. Verander de ROI bij voorkeur met de meting gestopt
+        (stop_continuous() -> set_roi() -> start_continuous())."""
+        width = max(4, min(16, int(width)))
+        height = max(4, min(16, int(height)))
+        if centre_spad is None:
+            centre_spad = 199
+        self._write8(ROI_CONFIG__USER_ROI_CENTRE_SPAD, centre_spad)
+        self._write8(ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE,
+                     ((height - 1) << 4) | (width - 1))
+
     def get_timing_budget_us(self):
         macro_period_us = self._calc_macro_period_us(
             self._read8(RANGE_CONFIG__VCSEL_PERIOD_A))
@@ -461,6 +503,11 @@ class VL53L1X:
         range_mm = (self._final_range_mm * 2011 + 0x0400) // 0x0800
         # empirische schaalcorrectie voor dit exemplaar, zie RANGE_SCALE_CORRECTION
         self.range_mm = round(range_mm * RANGE_SCALE_CORRECTION)
+        # signaal-/omgevingslichtsterkte in MCPS (vast punt 9.7, zoals Pololu's
+        # countRateFixedToFloat()); een rand of een klein, ver doel geeft een
+        # laag signaal terwijl de afstand nog "geldig" kan zijn
+        self.signal_mcps = self._peak_signal_count_rate_xtalk / 128.0
+        self.ambient_mcps = self._ambient_count_rate / 128.0
 
         s = self._range_status_raw
         if s in (17, 2, 1, 3):

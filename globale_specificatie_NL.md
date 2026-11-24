@@ -82,6 +82,17 @@ Een hoge numerieke resolutie is niet automatisch dezelfde grootheid als fysieke 
 | zwenkwiel | wielas | zwenkwiel | **150mm** (2026-10-22 opgegeven; stond eerder als 155mm "wiel → zwenkwiel") | horizontaal |
 | zwenkwiel | grond | montagevlak | 50mm | verticaal |
 
+**Afstandssensoren t.o.v. de wielas — [GEMETEN] 2026-11-23 (schuifmaat):** assenstelsel van de kar met de oorsprong in het midden van de wielas (het draaipunt bij rotatie op de plaats); x = naar rechts van de middellijn, y = vooruit, z = hoogte boven de grond.
+
+| Sensor | x (zijwaarts) | y (vóór de wielas) | z (hoogte) | opmerking |
+|---|---|---|---|---|
+| Ultrasoon (RCWL-1601), voorkant | **−3,5mm** | **≈ 33mm** | **85mm** | links van de middellijn (gezien vanuit de kar; van voren gezien rechts). 1,5mm vóór het frame; voorkant frame → wielas = 31,5mm |
+| ToF (VL53L1X) | **+32mm** | **36mm** | **73mm** | rechts van de middellijn (gezien vanuit de kar; van voren gezien links). Bevestigd met de lichtbak-sweeps van 2026-11-24: de ToF kijkt recht in de lamp bij θ ≈ −atan(3,2/afstand) |
+
+- De **"~80mm vóór de as"** in de commentaren van `tests/test_autodrive.py` en `tests/test_drive.py` (afgeleid als 230 − 150) is **fout**. De ultrasoon zit maar ~33mm vóór de wielas. Die commentaren moeten worden aangepast zodra die bestanden weer onder handen worden genomen.
+- Beide sensoren zitten dicht bij de bovenrand van de lichtbak (100mm hoog). Daardoor kan hun bundel over de bak heen vallen op de fles of de achtergrond.
+- Een afstand D die een sensor meet, omrekenen naar de afstand vanaf de wielas, onder een hoek φ: `d(φ) = D/cos φ − x·tan φ − y` (met de x en y van de sensor uit deze tabel).
+
 **Gewichtsverdeling en massa — [GEMETEN] 2026-10-22, arm in rust, zonder last:**
 
 | Steunpunt | Belasting | Aandeel |
@@ -540,8 +551,8 @@ LDR-scan module. Draait het karretje via `stepper.rotate()`, samples LDR A en B 
 - **Richtingssignaal** `ldr_diff = ln R_A − ln R_B'` (`diff_from_adc()`, `measure_diff()`, `read_synced_diff()`): positief = bron rechts (B is de rechter cel), dus `LDR_DIFF_SIGN = +1`. Op 0,5 m: ±0,02 bij 1°, ±0,2 bij 5°, ±0,75 bij 10°, ±1,4 bij 15°; monotoon tot ±15°, teken klopt tot ±25°. Bewust geen (A−B)/(A+B), die explodeert als beide cellen donker zijn.
 - `TARGET_SAMPLES_PER_DEG = 3` — bij 370° ≈ 1110 opgeslagen scanpunten. De drie resultaatarrays gebruiken samen ~13 KB; de drie 10-elements-ringbuffers voegen circa 80 bytes toe.
 
-**Fysieke montage (gemeten, 2026-09-19):**
-- LDR's zitten **55 mm boven de grond**, **40 mm uit elkaar** in het horizontale vlak (zie ook punt 2 hierboven, "LDR's staan horizontaal uit elkaar"). De **laser (kruishaar) zit precies in het midden** tussen de twee LDR's.
+**Fysieke montage (gemeten 2026-09-19, hermeten met schuifmaat 2026-11-23):**
+- LDR's zitten **55 mm boven de grond**, **39 mm uit elkaar** in het horizontale vlak (was 40 mm). Ze liggen symmetrisch op de middellijn van de kar, precies midden tussen de wielen, op **y ≈ 25 mm vóór de wielas** (assenstelsel zie *Afmetingen* → *Afstandssensoren t.o.v. de wielas*). De kokers staan evenwijdig (zie ook punt 2 hierboven, "LDR's staan horizontaal uit elkaar"). De **laser (kruishaar) zit precies in het midden** tussen de twee LDR's.
 - Elke LDR zit in een **koker van 5 mm diameter**, op **15 mm diepte** vanaf de opening. Dat geeft de LDR een eigen richtinggevoeligheid ("tunnelhoek", zie `tests/test_ldr_beam.py`), los van de bundelbreedte van de lichtbron zelf (zie *Rijden naar de lichtbron* → Spleet van de lichtbron):
   ```
   tunnelhoek (halfhoek) = atan(straal / diepte) = atan(2,5 / 15) ≈ 9,5°   (volledig ≈ 19°)
@@ -869,6 +880,51 @@ Meetscript voor de constanten waarop de bundelas-positionering rust. Alles vanui
 | `dither_teken()` | aan welke kant van de bundelas de kar zit | op de kar |
 
 De twee bankmetingen zijn zo opgezet dat ze elk **één factor isoleren**: `gamma()` houdt φ constant (op de as) en varieert alleen de afstand; `bundel()` houdt de afstand én de tunnelhoek constant en varieert alleen φ. `meet_y()` waarschuwt als A − B niet genulled is — dan meet je tunnelvignettering in plaats van de bundel.
+
+---
+
+### `tests/test_lichtbak_scan.py` — scheve lichtbak (ToF, ultrasoon, LDR)
+
+**Vraag:** wat zien de sensoren als de lichtbak onder een hoek α t.o.v. de aanrijlijn staat (tot ±45°), op 20–50 cm? De kar staat op de gradenboog rond de lamp (kar onder α ≡ bak over α gedraaid), laser op de lamp. α positief = kar staat, kijkend naar de bak, **rechts** van de bundelas.
+
+| Functie | Wat |
+|---|---|
+| `sweep(afstand, alfa)` | kar draait gyro-gestuurd van −40° tot +40° (stappen van 2°) en logt per stap ToF (4 ROI's), ultrasoon en LDR naar `/lichtbak_scan.csv` |
+| `lr_meting(afstand, alfa)` | stilstaand: ook de ROI's links/rechts, naar `/lichtbak_lr.csv` |
+| `roi_test()` | live ToF per ROI, om de oriëntatie van de ROI's te controleren |
+| `laser_aan()` | laser aan om te richten (aansturing op afstand via `mpremote exec`, `sweep(..., vraag=False)`) |
+
+**ToF-ROI's** (nieuw in `lib/VL53L1X/vl53l1x.py`: `set_roi()`, `spad_nummer()`, `signal_mcps`/`ambient_mcps`). Oriëntatie **[GEMETEN] 2026-11-24** met een karton op 15 cm voor een wand op 30 cm: ST-tabel rij 12 (SPAD 59) kijkt **omhoog**, rij 3 (SPAD 195) **omlaag**, kolom 3 (SPAD 159) **links**, kolom 12 (SPAD 231) **rechts** (gezien vanuit de kar). Kleine 4×4-ROI's hebben **100 ms** timing budget nodig: met 33 ms gaven ze op 50 cm vrijwel nooit een geldige meting. Elk ROI heeft een eigen afstandsoffset (tegen een vlakke wand: `m4` ~2 cm korter dan 16×16) — **[TE KALIBREREN]** tegen een haakse wand op 20 en 30 cm.
+
+**Resultaten [GEMETEN] 2026-11-24** (data: `lichtbak_scan_2026-11-24.csv` en `lichtbak_lr_2026-11-24.csv` in de projectroot; runs `3715_50_+0`, `3942_50_+0` (oude ToF-budget) en `5081_50_+20` (zwenkwiel op de mat) niet gebruiken):
+
+- **LDR-nul** (θ waar `ldr_diff` = 0, kar met de laser op de lamp gericht):
+
+  | α | 50 cm | 30 cm | 20 cm |
+  |---|---|---|---|
+  | 0° | −1,5° | −1,1° | −0,6° |
+  | +20° | −2,0° | −1,5° | −1,6° |
+  | +30° | −2,5° | −2,2° | −2,1° |
+  | +45° | −3,7° | −2,8° | −2,6° |
+  | −45° | +3,9° | +2,9° | +2,8° |
+
+  De nul schuift symmetrisch naar de bundelas, ~3–4° bij 45° (kleiner dan de 0,5 m-meting van 2026-10-19 in [`Meting_LDR_afstand_hoek.md`](Meting_LDR_afstand_hoek.md)). Op 20 cm is 3° ≈ 1 cm zijwaarts; samen met de fles-offset s·sin α (2,1 cm bij 45°) valt dat buiten de grijpertolerantie van ±1,75 cm, dus bij grote α is correctie nodig.
+- **Ultrasoon is blind voor een scheve bak:** bij α ≥ 30° op 20–30 cm kaatst het voorvlak de bundel weg en leest de ultrasoon 67–85 cm i.p.v. ~20 cm. Bij α = 0 ziet hij de bak juist over ±35° (brede bundel), dus voor de hoek van de bak is hij onbruikbaar. `_obstakel_afstand()` in `tests/test_autodrive.py` (bij twee geldige metingen de kleinste) vangt dit op — die regel is dus essentieel.
+- **ToF ziet de bak in alle standen**, met de kleine ROI's betrouwbaar op 20–30 cm (`m4`/`onder` binnen ~1–2 cm van de verwachte afstand). Het volle 16×16-venster kijkt op 50 cm deels over de bak (100 mm hoog) heen en meet dan ~5 cm te ver.
+- **De lamp verstoort de ToF niet:** recht in de lamp kijkend stijgt `ambient` ~50× (0,2 → 10,8 MCPS), maar de afstand blijft binnen ~0,5 cm gelijk (witte LED, vrijwel niets op 940 nm). Niet getest: daglicht en grotere afstanden.
+- **α uit een sweep** (ToF-afstand als functie van θ): lukte nog niet — bij grote α meet de ToF een "V" met het minimum op de hoek van de bak (voorvlak + schuin zijvlak), geen enkel vlak.
+- **α uit links/rechts (stilstaand):** R−L t.o.v. de meting bij α = 0 (nulpunt +0,8 cm op 30 cm, −1,8 cm op 20 cm):
+
+  | α | 30 cm | 20 cm |
+  |---|---|---|
+  | +20° | −2,3 cm | −1,0 cm |
+  | −20° | +4,5 cm | +2,0 cm |
+  | +45° | −5,6 cm | −1,4 cm |
+  | −45° | geen meting rechts | geen meting rechts |
+
+  Het teken klopt altijd; de grootte klopt alleen op 30 cm bij positieve α (verwacht D·tan α·0,21 rad = 2,3 en 6,3 cm). Op 50 cm onbruikbaar. De asymmetrie komt doordat de ToF 32 mm **rechts** van de lamplijn zit: het rechter ROI kijkt dan naar (of langs) de rechterrand van de bak.
+
+**Gevolg / plan:** de ToF is voor deze taak bruikbaarder dan de ultrasoon. Voorstel (2026-11-24): de ToF naar het midden verplaatsen (tussen de LDR's, zelfde hoogte 73 mm) en de ultrasoon verwijderen — maar eerst de missie in software één keer **ToF-only** draaien met de ultrasoon nog gemonteerd. Bij verwijderen moet het nulpunt van de armgeometrie (`lib/gripper/geometry.py`, nu de voorkant van de ultrasoon) mee naar de ToF, en moeten de ROI-oriëntaties opnieuw met het karton gecontroleerd worden.
 
 ---
 
